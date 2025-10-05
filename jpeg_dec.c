@@ -14,7 +14,7 @@
 
 #define DEBUG_VERBOSE 0
 #define DEBUG_MEMORY 0
-#define PROFILING 1
+#define PROFILING 0
 #define FLOAT float
 #define pi 3.141592653589793
 
@@ -780,7 +780,7 @@ void dequantize(FLOAT *restrict block, uint8_t* quant) {
 void generate_luts(jpeg_state_t* state) {
     for (size_t u = 0; u < BLOCK_RES; ++u) {
         for (size_t x = 0; x < BLOCK_RES; ++x) {
-            const FLOAT dct_value = cos((((2.0 * x) + 1.0) * u * pi) / (2.0 * (FLOAT)BLOCK_RES));
+            const FLOAT dct_value = cosf((((2.0 * (FLOAT)x) + 1.0) * (FLOAT)u * pi) / (2.0 * (FLOAT)BLOCK_RES));
             lut_dct[(BLOCK_RES * u) + x] = dct_value;
         }
     }
@@ -825,6 +825,10 @@ void generate_luts(jpeg_state_t* state) {
     state->has_luts = 1;
 }
 
+#define NAIVE_DCT 1
+#define AAN 0
+
+#if NAIVE_DCT
 void idct_1d(const FLOAT *restrict in, FLOAT *restrict out) {
     const float inv_n = 1.0f / (float)BLOCK_RES;
     const float scale = sqrtf(2.0f * inv_n);
@@ -848,17 +852,48 @@ void idct_2d(FLOAT *restrict block, jpeg_state_t* state) {
         idct_1d(&block[r * BLOCK_RES], &tmp[r * BLOCK_RES]);
     }
 
+    FLOAT col_in[BLOCK_RES];
+    FLOAT col_out[BLOCK_RES];
     for (int c = 0; c < BLOCK_RES; ++c) {
-        FLOAT col_in[BLOCK_RES];
-        FLOAT col_out[BLOCK_RES];
         for (int r = 0; r < BLOCK_RES; r++) col_in[r] = tmp[(r * BLOCK_RES) + c];
         idct_1d(col_in, col_out);
         for (int r = 0; r < BLOCK_RES; r++) tmp[(r * BLOCK_RES) + c] = col_out[r];
     }
 
-    // todo: avoid copy? maybe swap buffers
+    // todo: feels ugly, maybe fix?
     memcpy(block, tmp, BLOCK_RES * BLOCK_RES * sizeof(FLOAT));
 }
+#elif AAN
+void idct_2d(FLOAT *restrict block, jpeg_state_t *state) {
+    const int N = BLOCK_RES; // typically 8
+    FLOAT workspace[BLOCK_RES * BLOCK_RES];
+
+    // Pass 1: columns
+    for (int x = 0; x < N; ++x) {
+        for (int y = 0; y < N; ++y) {
+            FLOAT sum = 0.0f;
+            for (int u = 0; u < N; ++u) {
+                FLOAT c = (u == 0) ? sqrtf(1.0f / N) : sqrtf(2.0f / N);
+                sum += c * block[u * N + x] * cosf((2.0f * y + 1.0f) * u * pi / (2.0f * N));
+            }
+            workspace[y * N + x] = sum;
+        }
+    }
+
+    // Pass 2: rows
+    for (int y = 0; y < N; ++y) {
+        for (int x = 0; x < N; ++x) {
+            FLOAT sum = 0.0f;
+            for (int u = 0; u < N; ++u) {
+                FLOAT c = (u == 0) ? sqrtf(1.0f / N) : sqrtf(2.0f / N);
+                sum += c * workspace[y * N + u] * cosf((2.0f * x + 1.0f) * u * pi / (2.0f * N));
+            }
+            block[y * N + x] = sum;
+        }
+    }
+}
+
+#endif
 
 void debug_block(const FLOAT* block) {
 #if DEBUG_VERBOSE
@@ -1083,13 +1118,14 @@ void parse_image_data(FILE* file, jpeg_state_t* state) {
         // reverse order because the non-upscaled data is in the top left, and then then i can write the  
         // upscaled image to the same buffer without overwriting the source data
         // todo: interpolation - maybe just for the odd pixels mix the closest even neighbors
+        FLOAT *restrict img_comp = image_raw[comp_id];
         for (int dst_y = out_h - 1; dst_y >= 0; --dst_y) {
             const FLOAT src_y = (FLOAT)dst_y * src_pitch_y;
             for (int dst_x = out_w - 1; dst_x >= 0; --dst_x) {
                 const FLOAT src_x = (FLOAT)dst_x * src_pitch_x;
                 const size_t src_index = (((size_t)floor(src_y)) * raw_w) + (size_t)floor(src_x);
                 const size_t dst_index = (size_t)((dst_y * raw_w) + dst_x);
-                image_raw[comp_id][dst_index] = image_raw[comp_id][src_index];
+                img_comp[dst_index] = img_comp[src_index];
             }
         }
     }
@@ -1179,7 +1215,7 @@ int main(int argc, char** argv) {
         // return 1;
     }
     
-    const char* in_path = "D:/Projects/Offline/C/jpeg_decoder/test assets/test12.jpg";
+    const char* in_path = "D:/Projects/Offline/C/jpeg_decoder/test assets/test1.jpg";
     // const char* in_path = argv[1];
     // const char* out_path = argv[2];
 
@@ -1198,7 +1234,7 @@ int main(int argc, char** argv) {
     #define LOOP_COUNT (256)
     for (size_t _loops = 1; _loops < (LOOP_COUNT + 1); ++_loops) {
     fseek(in_file, 0, SEEK_SET);
-    printf("%6i / %i\r", _loops, LOOP_COUNT);
+    // printf("%6i / %i\r", _loops, LOOP_COUNT);
     #endif
     state.scratch_buffer = MALLOC(BLOCK_RES * BLOCK_RES * sizeof(FLOAT));
     // handle each section
