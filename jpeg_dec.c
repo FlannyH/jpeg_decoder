@@ -16,6 +16,7 @@
 #define DEBUG_MEMORY 0
 #define PROFILING 1
 #define FLOAT float
+#define pi 3.141592653589793
 
 #define BLOCK_RES 8
 FLOAT ALIGN(64) lut_dct[BLOCK_RES * BLOCK_RES] = {0};
@@ -230,16 +231,16 @@ typedef struct {
 } rgb8_t;
 
 typedef struct {
-    uint16_t has_jfif : 1;
-    uint16_t has_jfxx : 1;
-    uint16_t has_exif : 1;
-    uint16_t has_sof : 1;
-    uint16_t has_sos : 1;
-    uint16_t has_chn : 1;
-    uint16_t has_thumb : 1;
-    uint16_t has_quant : 1;
-    uint16_t has_huff_tbl : 1;
-    uint16_t has_luts : 1;
+    uint8_t has_jfif;
+    uint8_t has_jfxx;
+    uint8_t has_exif;
+    uint8_t has_sof;
+    uint8_t has_sos;
+    uint8_t has_chn;
+    uint8_t has_thumb;
+    uint8_t has_quant;
+    uint8_t has_huff_tbl;
+    uint8_t has_luts;
 
     jpeg_app0_jfif_t jfif;
     jpeg_app0_jfxx_t jfxx;
@@ -777,18 +778,10 @@ void dequantize(FLOAT *restrict block, uint8_t* quant) {
 }
 
 void generate_luts(jpeg_state_t* state) {
-    const FLOAT pi = 3.141592653589793;
-    const FLOAT one_over_sqrt_one = 1.0 / sqrt(2.0);
-
     for (size_t u = 0; u < BLOCK_RES; ++u) {
         for (size_t x = 0; x < BLOCK_RES; ++x) {
-            FLOAT dct_value = cos((((2.0 * x) + 1.0) * u * pi) / (2.0 * (FLOAT)BLOCK_RES));
+            const FLOAT dct_value = cos((((2.0 * x) + 1.0) * u * pi) / (2.0 * (FLOAT)BLOCK_RES));
             lut_dct[(BLOCK_RES * u) + x] = dct_value;
-
-            FLOAT factor = 1.0;
-            if (u == 0 && x == 0) factor = 0.5;
-            else if (u == 0 || x == 0) factor = one_over_sqrt_one;
-            lut_factor[(BLOCK_RES * u) + x] = factor;
         }
     }
 
@@ -832,29 +825,39 @@ void generate_luts(jpeg_state_t* state) {
     state->has_luts = 1;
 }
 
-void idct(FLOAT *restrict block, jpeg_state_t* state) {
-    if (!state->has_luts) generate_luts(state);
+void idct_1d(const FLOAT *restrict in, FLOAT *restrict out) {
+    const float inv_n = 1.0f / (float)BLOCK_RES;
+    const float scale = sqrtf(2.0f * inv_n);
+    const float scale0 = sqrtf(inv_n);
 
-    const size_t block_size = BLOCK_RES * BLOCK_RES * sizeof(FLOAT);
-
-    for (size_t y = 0; y < BLOCK_RES; ++y) {
-        for (size_t x = 0; x < BLOCK_RES; ++x) {
-            FLOAT sum = 0.0;
-            for (size_t v = 0; v < BLOCK_RES; ++v) {
-                const FLOAT dct_value2 = lut_dct[(BLOCK_RES * v) + y];
-                for (size_t u = 0; u < BLOCK_RES; ++u) {
-                    const FLOAT dct_value1 = lut_dct[(BLOCK_RES * u) + x];
-                    const FLOAT factor = lut_factor[(BLOCK_RES * v) + u];
-                    const FLOAT table_value = block[(BLOCK_RES * v) + u];
-                    sum += table_value * factor * dct_value1 * dct_value2;
-                }
-            }
-
-            ((FLOAT*)state->scratch_buffer)[(BLOCK_RES * y) + x] = sum / 4.0;
+    for (int x = 0; x < BLOCK_RES; ++x) {
+        FLOAT sum = 0.0;
+        for (int u = 0; u < BLOCK_RES; ++u) {
+            const float c = (u == 0) ? scale0 : scale;
+            // sum += c * in[u] * cosf((2.0*(FLOAT)x + 1.0) * (FLOAT)u * pi / (2.0*BLOCK_RES));
+            sum += c * in[u] * lut_dct[(BLOCK_RES * u) + x];
         }
+        out[x] = sum;
+    }
+}
+
+void idct_2d(FLOAT *restrict block, jpeg_state_t* state) {
+    FLOAT *restrict tmp = (FLOAT*)state->scratch_buffer;
+
+    for (int r = 0; r < BLOCK_RES; ++r) {
+        idct_1d(&block[r * BLOCK_RES], &tmp[r * BLOCK_RES]);
     }
 
-    memcpy(block, state->scratch_buffer, block_size);
+    for (int c = 0; c < BLOCK_RES; ++c) {
+        FLOAT col_in[BLOCK_RES];
+        FLOAT col_out[BLOCK_RES];
+        for (int r = 0; r < BLOCK_RES; r++) col_in[r] = tmp[(r * BLOCK_RES) + c];
+        idct_1d(col_in, col_out);
+        for (int r = 0; r < BLOCK_RES; r++) tmp[(r * BLOCK_RES) + c] = col_out[r];
+    }
+
+    // todo: avoid copy? maybe swap buffers
+    memcpy(block, tmp, BLOCK_RES * BLOCK_RES * sizeof(FLOAT));
 }
 
 void debug_block(const FLOAT* block) {
@@ -939,7 +942,7 @@ void decode_block(FILE* file, bit_stream_t* stream, jpeg_state_t* state, jpeg_co
     dequantize(block, quant);
     entropy_decode(block, state);
     debug_block(block);
-    idct(block, state);
+    idct_2d(block, state);
     add(block, 128.0, res2);
 }
 
@@ -1187,7 +1190,9 @@ int main(int argc, char** argv) {
         return 2;
     }
 
+    
     jpeg_state_t state = {0};
+    generate_luts(&state);
 
     #if PROFILING
     #define LOOP_COUNT (256)

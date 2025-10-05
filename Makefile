@@ -20,9 +20,8 @@ CC = gcc
 # CFLAGS = -Wall -Wextra -std=c11 -O2
 # CFLAGS = -Wall -Wextra -std=c11 -O3
 # CFLAGS = -Wall -Wextra -std=c11 -O3 -ftree-vectorize -march=native
-CFLAGS = -Wall -Wextra -std=c11 -O3 -ftree-vectorize -march=native -fopt-info-vec-all
-
-# CFLAGS = -Wall -Wextra -std=c11 -O3 -ftree-vectorize -march=native -ffast-math
+# CFLAGS = -Wall -Wextra -std=c11 -O3 -ftree-vectorize -march=native -fopt-info-vec-all
+CFLAGS = -Wall -Wextra -std=c11 -O3 -ftree-vectorize -march=native -fopt-info-vec-all -ffast-math
 
 $(BUILD_DIR):
 	mkdir -p $(BUILD_DIR)
