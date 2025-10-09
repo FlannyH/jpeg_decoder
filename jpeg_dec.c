@@ -6,15 +6,18 @@
 #include <threads.h>
 #include <time.h>
 
+// todo: restart marker handling
+
 #if defined(_MSC_VER)
 #define ALIGN(a) __declspec(align(a))
 #else
 #define ALIGN(a) __attribute__((aligned(a)))
 #endif
 
+#define DEBUG 0
 #define DEBUG_ERROR 1
 #define DEBUG_VERBOSE 0
-#define DEBUG_MEMORY 0
+#define DEBUG_MEMORY 1
 #define PROFILING 0
 #define FLOAT float
 #define pi 3.141592653589793
@@ -46,23 +49,6 @@ thread_local size_t error_length = 0;
 #define TODO() {}
 
 #endif
-
-#define MAX_ALLOC_COUNT 256
-void* allocated_chunks[MAX_ALLOC_COUNT] = {0};
-size_t alloc_cursor = 0;
-
-/// Memory
-void* mem_alloc(size_t size) {
-    return allocated_chunks[alloc_cursor++] = malloc(size);
-}
-#define MALLOC(size) mem_alloc(size)
-
-void mem_free_all(void) {
-    for (size_t i = 0; i < alloc_cursor; ++i) {
-        free(allocated_chunks[i]);
-    }
-    alloc_cursor = 0;
-}
 
 /// Enums
 typedef enum {
@@ -275,6 +261,10 @@ typedef struct {
     rgb8_t* out_image;
     size_t out_width;
     size_t out_height;
+    
+#define MAX_ALLOC_COUNT 256
+    void* allocated_chunks[MAX_ALLOC_COUNT];
+    size_t alloc_cursor;
 
     jpeg_channel_t components[256];
     uint8_t* jfif_thumbnail_pixels; 
@@ -282,6 +272,19 @@ typedef struct {
     jpeg_huffman_table_decoded_t* huffman_tables_dc;
     jpeg_huffman_table_decoded_t* huffman_tables_ac;
 } jpeg_state_t;
+
+/// Memory
+void* mem_alloc(size_t size, jpeg_state_t* state) {
+    if (state->alloc_cursor >= MAX_ALLOC_COUNT) ERROR("Ran out of memory allocation slots")
+    return state->allocated_chunks[state->alloc_cursor++] = malloc(size);
+}
+
+void mem_free_all(jpeg_state_t* state) {
+    for (size_t i = 0; i < state->alloc_cursor; ++i) {
+        free(state->allocated_chunks[i]);
+    }
+    state->alloc_cursor = 0;
+}
 
 typedef struct {
     uint8_t scan_buffer[65536];
@@ -383,7 +386,7 @@ void parse_jfif_app0(FILE* file, jpeg_state_t* state) {
         const size_t thumbnail_size = header.length - app0_size - jfif_size;
 
         if (thumbnail_size != 0) {
-            state->jfif_thumbnail_pixels = MALLOC(thumbnail_size);
+            state->jfif_thumbnail_pixels = mem_alloc(thumbnail_size, state);
             read_bytes(file, state->jfif_thumbnail_pixels, thumbnail_size);
             state->n_jfif_thumbnail_bytes = thumbnail_size;
         }
@@ -506,7 +509,7 @@ void parse_quant_table(FILE* file, jpeg_state_t* state) {
     // allocate new quantization table
     const size_t table_id = state->n_quant_tables++;
     state->quant_tables = realloc(state->quant_tables, sizeof(*state->quant_tables) * (state->n_quant_tables));
-    state->quant_tables[table_id] = MALLOC(table_buf_size);
+    state->quant_tables[table_id] = mem_alloc(table_buf_size, state);
 
     read_bytes(file, state->quant_tables[table_id], table_buf_size);
 
@@ -533,9 +536,9 @@ void parse_huffman_table(FILE* file, jpeg_state_t* state) {
 
     jpeg_huffman_table_decoded_t huff_tbl;
     huff_tbl.table_buf_size = header.length - 19;
-    huff_tbl.symbols = MALLOC(huff_tbl.table_buf_size);
-    huff_tbl.codes = MALLOC(huff_tbl.table_buf_size * sizeof(uint32_t));
-    huff_tbl.code_lengths = MALLOC(huff_tbl.table_buf_size);
+    huff_tbl.symbols = mem_alloc(huff_tbl.table_buf_size, state);
+    huff_tbl.codes = mem_alloc(huff_tbl.table_buf_size * sizeof(uint32_t), state);
+    huff_tbl.code_lengths = mem_alloc(huff_tbl.table_buf_size, state);
     
     memset(huff_tbl.symbols, 0, huff_tbl.table_buf_size);
     memset(huff_tbl.codes, 0, huff_tbl.table_buf_size * sizeof(uint32_t));
@@ -543,7 +546,7 @@ void parse_huffman_table(FILE* file, jpeg_state_t* state) {
     read_bytes(file, huff_tbl.symbols, huff_tbl.table_buf_size);
 
     const size_t lut_size = (1 << 16) * sizeof(jpeg_huffman_lut_entry_t);
-    huff_tbl.left_shifted_code_lut = MALLOC(lut_size);
+    huff_tbl.left_shifted_code_lut = mem_alloc(lut_size, state);
     memset(huff_tbl.left_shifted_code_lut, 0, lut_size);
 
     // decode table
@@ -612,7 +615,7 @@ void parse_start_of_scan(FILE* file, jpeg_state_t* state) {
     read_u8(file, &header.n_components);
 
     const size_t n_bytes_components = sizeof(jpeg_component_t) * (size_t)header.n_components;
-    jpeg_component_t* components = MALLOC(n_bytes_components);
+    jpeg_component_t* components = mem_alloc(n_bytes_components, state);
     read_bytes(file, components, n_bytes_components);
 
     read_u8(file, &header.spectral_selection_min);
@@ -797,7 +800,7 @@ void idct_2d(FLOAT *restrict block, jpeg_state_t *state) {
         for (int y = 0; y < BLOCK_RES; ++y) {
             FLOAT sum = 0.0f;
             for (int u = 0; u < BLOCK_RES; ++u) {
-                FLOAT c = (u == 0) ? sqrtf(1.0f / BLOCK_RES) : sqrtf(2.0f / BLOCK_RES);
+                const FLOAT c = (u == 0) ? sqrtf(1.0f / BLOCK_RES) : sqrtf(2.0f / BLOCK_RES);
                 sum += c * block[u * BLOCK_RES + x] * lut_dct[(BLOCK_RES * u) + y];
             }
             scratch_buffer[y * BLOCK_RES + x] = sum;
@@ -809,7 +812,7 @@ void idct_2d(FLOAT *restrict block, jpeg_state_t *state) {
         for (int x = 0; x < BLOCK_RES; ++x) {
             FLOAT sum = 0.0f;
             for (int u = 0; u < BLOCK_RES; ++u) {
-                FLOAT c = (u == 0) ? sqrtf(1.0f / BLOCK_RES) : sqrtf(2.0f / BLOCK_RES);
+                const FLOAT c = (u == 0) ? sqrtf(1.0f / BLOCK_RES) : sqrtf(2.0f / BLOCK_RES);
                 sum += c * scratch_buffer[y * BLOCK_RES + u] * lut_dct[(BLOCK_RES * u) + x];
             }
             block[y * BLOCK_RES + x] = sum;
@@ -822,7 +825,7 @@ void debug_block(const FLOAT* block) {
     printf("BLOCK VALUES:\n");
     for (size_t i = 0; i < 64; ++i) {
         if(i % BLOCK_RES == 0) printf("\n");
-        printf("%4.0f, ", block[i]);
+        printf("%6.2f, ", block[i]);
     }
     printf("\n");
 #else
@@ -966,10 +969,10 @@ void parse_image_data(FILE* file, jpeg_state_t* state) {
     // Allocate raw planes
     FLOAT* image_raw[256] = {NULL};
     for (size_t comp_id = 0; comp_id < state->start_of_scan.n_components; ++comp_id) {
-        image_raw[comp_id] = MALLOC(raw_size * sizeof(FLOAT));
+        image_raw[comp_id] = mem_alloc(raw_size * sizeof(FLOAT), state);
         memset(image_raw[comp_id], 0, raw_size * sizeof(FLOAT));
     }
-    FLOAT* block_scratch = MALLOC(BLOCK_RES * BLOCK_RES * sizeof(FLOAT));
+    FLOAT* block_scratch = mem_alloc(BLOCK_RES * BLOCK_RES * sizeof(FLOAT), state);
     
     FLOAT dc_prev[256] = {0.0};
     for (size_t mcu_y = 0; mcu_y < n_mcu_y; ++mcu_y) {
@@ -1066,7 +1069,7 @@ void parse_image_data(FILE* file, jpeg_state_t* state) {
     (void)index_i;
     (void)index_q;
 
-    rgb8_t *restrict out_image = MALLOC(out_w * out_h * sizeof(rgb8_t));
+    rgb8_t *restrict out_image = mem_alloc(out_w * out_h * sizeof(rgb8_t), state);
 
     // Grayscale with a single Y component
     if (state->start_of_scan.n_components == 1 && index_y >= 0) {
@@ -1121,7 +1124,7 @@ void parse_image_data(FILE* file, jpeg_state_t* state) {
 }
 
 void cleanup(jpeg_state_t* state) {
-    mem_free_all();
+    mem_free_all(state);
     memset(state, 0, sizeof(jpeg_state_t));
 }
 
@@ -1154,7 +1157,7 @@ int main(int argc, char** argv) {
     printf("%6i / %i\r", (int)_loops, LOOP_COUNT);
 #endif
     
-    state.scratch_buffer = MALLOC(BLOCK_RES * BLOCK_RES * sizeof(FLOAT));
+    state.scratch_buffer = mem_alloc(BLOCK_RES * BLOCK_RES * sizeof(FLOAT), &state);
     // handle each section
     jpeg_marker_t marker;
     while (fread(&marker, sizeof(jpeg_marker_t), 1, in_file)) {
@@ -1193,11 +1196,6 @@ int main(int argc, char** argv) {
     cleanup(&state);
 #endif
 
-
-#if DEBUG_MEMORY
-    mem_leak_check();
-#endif
-
     return 0;
 }
 #endif
@@ -1218,13 +1216,13 @@ int64_t registration_procedure(Provided_Registration_Entry* registration) {
 
 string jpeg_pre_render(Pre_Rendering_Info* pre_info) {
     if (pre_info->user_ptr == NULL) {
-        pre_info->user_ptr = MALLOC(sizeof(jpeg_state_t));
+        pre_info->user_ptr = malloc(sizeof(jpeg_state_t));
     }
     jpeg_state_t* state = (jpeg_state_t*)pre_info->user_ptr;
 
     fseek(pre_info->fileptr, 0, SEEK_SET);
     generate_luts(state);
-    state->scratch_buffer = MALLOC(BLOCK_RES * BLOCK_RES * sizeof(FLOAT));
+    state->scratch_buffer = mem_alloc(BLOCK_RES * BLOCK_RES * sizeof(FLOAT), state);
 
     jpeg_marker_t marker;
     while (fread(&marker, sizeof(jpeg_marker_t), 1, pre_info->fileptr)) {
@@ -1288,12 +1286,9 @@ string jpeg_render(Pre_Rendering_Info* pre_info, Rendering_Info* render_info) {
 string jpeg_cleanup(Pre_Rendering_Info* pre_info) {
     if (pre_info->user_ptr != NULL) {
         cleanup((jpeg_state_t*)pre_info->user_ptr);
+        free(pre_info->user_ptr);
         pre_info->user_ptr = NULL;
     }
-
-#if DEBUG_MEMORY
-    mem_leak_check();
-#endif
 
     return (string){0};
 }
