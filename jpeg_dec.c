@@ -4,8 +4,6 @@
 #include <stdio.h>
 #include <math.h>
 
-// todo: fix memory leaks
-
 #if defined(_MSC_VER)
 #define ALIGN(a) __declspec(align(a))
 #else
@@ -14,37 +12,33 @@
 
 #define DEBUG_VERBOSE 0
 #define DEBUG_MEMORY 0
-#define PROFILING 0
+#define PROFILING 1
+#define STANDALONE 1
+#define MIV_LIBRARY 0
 #define FLOAT float
 #define pi 3.141592653589793
 
 #define BLOCK_RES 8
-FLOAT ALIGN(64) lut_dct[BLOCK_RES * BLOCK_RES] = {0};
-FLOAT ALIGN(64) lut_factor[BLOCK_RES * BLOCK_RES] = {0};
-int ALIGN(64) lut_zigzag[BLOCK_RES * BLOCK_RES]  = {0};
+FLOAT ALIGN(128) lut_dct[BLOCK_RES * BLOCK_RES] = {0};
+int ALIGN(128) lut_zigzag[BLOCK_RES * BLOCK_RES]  = {0};
+
+#if DEBUG
+#define ERROR(err) { printf("error: %s:%i: %s\n", __FILE__, __LINE__, err); exit(-2); }
+#define TODO() { printf("todo: %s:%i\n", __FILE__, __LINE__); exit(-1); }
+#else
+#define ERROR(err) {}
+#define TODO()
+#endif
 
 #define MAX_ALLOC_COUNT 256
 void* allocated_chunks[MAX_ALLOC_COUNT] = {0};
 size_t alloc_cursor = 0;
 
-#if 0
-void* mem_alloc(size_t size) {
-    const size_t align = 64;
-    void* ptr = malloc(size + 64);
-    allocated_chunks[alloc_cursor++] = ptr;
-    // if (((intptr_t)ptr % align) != 0) {
-        // ptr += 64 - ((intptr_t)ptr % align);
-    // }
-    ptr = (void*)(((intptr_t)ptr + (align - 1)) & ~(align - 1));
-    return ptr;
-}
-#define MALLOC(size) __builtin_assume_aligned(mem_alloc(size), 64)
-#else
+/// Memory
 void* mem_alloc(size_t size) {
     return allocated_chunks[alloc_cursor++] = malloc(size);
 }
 #define MALLOC(size) mem_alloc(size)
-#endif
 
 void mem_free_all(void) {
     for (size_t i = 0; i < alloc_cursor; ++i) {
@@ -53,7 +47,7 @@ void mem_free_all(void) {
     alloc_cursor = 0;
 }
 
-
+/// Enums
 typedef enum {
     JPEG_MARKER_START_OF_FRAME = 0xC0, // metadata
     JPEG_MARKER_HUFFMAN_TABLE = 0xC4,
@@ -83,12 +77,21 @@ typedef enum {
     JPEG_BYTE_ORDER_BE = 0x4D4D,
 } jpeg_byte_order_t;
 
+typedef enum {
+    COMP_ID_UNDEFINED = 0,
+    COMP_ID_Y = 1,
+    COMP_ID_CB = 2,
+    COMP_ID_CR = 3,
+    COMP_ID_I = 4,
+    COMP_ID_Q = 5,
+} jpeg_component_id_t;
+
+// Structs
 typedef struct {
     uint8_t magic; // 0xFF
     uint8_t type; // see jpeg_marker_type_t
 } jpeg_marker_t;
 
-// todo: maybe just do this in the function and get rid of the struct? goes for the others too
 typedef struct {
     uint16_t length; // excluding the markers
     char identifier[5]; // either "JFIF" or "JFXX" including null terminator
@@ -186,22 +189,12 @@ typedef struct {
 } jpeg_huffman_lut_entry_t;
 
 typedef struct {
-    // todo: reassess if any of these are unused
     size_t table_buf_size;
     uint8_t* symbols;
     uint32_t* codes;
     uint8_t* code_lengths;
     jpeg_huffman_lut_entry_t* left_shifted_code_lut;
 } jpeg_huffman_table_decoded_t;
-
-typedef enum {
-    COMP_ID_UNDEFINED = 0,
-    COMP_ID_Y = 1,
-    COMP_ID_CB = 2,
-    COMP_ID_CR = 3,
-    COMP_ID_I = 4,
-    COMP_ID_Q = 5,
-} jpeg_component_id_t;
 
 typedef struct {
     uint8_t id; // see jpeg_component_id_t;
@@ -283,36 +276,11 @@ typedef struct {
     uint8_t curr_byte;
 } bit_stream_t;
 
-#if DEBUG
-#define ERROR(err) { printf("error: %s:%i: %s\n", __FILE__, __LINE__, err); exit(-2); }
-#define TODO() { printf("todo: %s:%i\n", __FILE__, __LINE__); exit(-1); }
-#else
-#define ERROR(err)
-#define TODO()
-#endif
-
-typedef enum {
-    ENTROPY_DEC_STEP_NONE = 0,
-    ENTROPY_DEC_STEP_RIGHT_ELSE_DOWN,
-    ENTROPY_DEC_STEP_DOWN_LEFT,
-    ENTROPY_DEC_STEP_DOWN_ELSE_RIGHT,
-    ENTROPY_DEC_STEP_UP_RIGHT,
-} jpeg_entropy_decoding_step_t;
-
-void entropy_decode(const FLOAT *restrict block, jpeg_state_t* state) {
-    const size_t n_values = (BLOCK_RES * BLOCK_RES);
-    const size_t edge = BLOCK_RES - 1;
-
-    for (size_t i = 0; i < n_values; ++i) {
-        ((FLOAT*)state->scratch_buffer)[i] = block[lut_zigzag[i]];        
-    }
-
-    memcpy(block, state->scratch_buffer, (BLOCK_RES * BLOCK_RES) * sizeof(FLOAT));
-}
-
 void read_s32(FILE* file, int32_t* dest, jpeg_byte_order_t byte_order) {
     if (byte_order == JPEG_BYTE_ORDER_LE) {
-        if (!fread(dest, sizeof(*dest), 1, file)) ERROR("failed to read u32");
+        if (!fread(dest, sizeof(*dest), 1, file)) {
+            ERROR("failed to read u32")
+        };
     }
     else if (byte_order == JPEG_BYTE_ORDER_BE) {
         uint8_t be_bytes[4];
@@ -320,7 +288,9 @@ void read_s32(FILE* file, int32_t* dest, jpeg_byte_order_t byte_order) {
             uint8_t bytes[4];
             int32_t u32;
         } le;
-        if (!fread(be_bytes, 1, 4, file)) ERROR("failed to read u32");
+        if (!fread(be_bytes, 1, 4, file)) {
+            ERROR("failed to read u32");
+        }
         le.bytes[0] = be_bytes[3];
         le.bytes[1] = be_bytes[2];
         le.bytes[2] = be_bytes[1];
@@ -328,7 +298,9 @@ void read_s32(FILE* file, int32_t* dest, jpeg_byte_order_t byte_order) {
         *dest = le.u32;
         
     }
-    else ERROR("invalid byte order");
+    else {
+        ERROR("invalid byte order");
+    }
 }
 
 void read_u16(FILE* file, uint16_t* dest, jpeg_byte_order_t byte_order) {
@@ -413,7 +385,9 @@ void parse_jfif_app0(FILE* file, jpeg_state_t* state) {
     }
     else if (strncmp(header.identifier, "JFXX", 4) == 0) {
         jpeg_app0_jfxx_t* jfxx = &state->jfxx;
+
         read_u8(file, &jfxx->thumbnail_format);        
+
         const size_t app0_size = 7;
         const size_t jfxx_size = 1;
         fseek(file, header.length - app0_size - jfxx_size, SEEK_CUR);
@@ -436,7 +410,8 @@ void parse_jfif_app1(FILE* file, jpeg_state_t* state) {
     read_u16(file, &state->exif.byte_order, JPEG_BYTE_ORDER_BE);
     read_u16(file, &state->exif.tiff_identifier, JPEG_BYTE_ORDER_BE);
     read_s32(file, &state->exif.ifd_offset, JPEG_BYTE_ORDER_BE);
-    // todo: exif parsing through vivver's code
+
+    // todo: exif parsing
     fseek(file, state->exif.length - 16, SEEK_CUR);
 
     state->has_exif = 1;
@@ -511,10 +486,13 @@ void parse_quant_table(FILE* file, jpeg_state_t* state) {
 
     const size_t table_buf_size = header.length - 3;
 
+    // allocate new quantization table
     const size_t table_id = state->n_quant_tables++;
     state->quant_tables = realloc(state->quant_tables, sizeof(*state->quant_tables) * (state->n_quant_tables));
     state->quant_tables[table_id] = MALLOC(table_buf_size);
+
     read_bytes(file, state->quant_tables[table_id], table_buf_size);
+
     state->has_quant = 1;
 
     #if DEBUG_VERBOSE
@@ -558,10 +536,12 @@ void parse_huffman_table(FILE* file, jpeg_state_t* state) {
 
     for (size_t i_bit_lengths = 0; i_bit_lengths < sizeof(header.bit_lengths); ++i_bit_lengths) {
         for (size_t i = 0; i < header.bit_lengths[i_bit_lengths]; ++i) {
-            huff_tbl.code_lengths[symbol_id] = length;
             const size_t code_start = (code++) << (15 - i_bit_lengths);
             const size_t code_end = ((code) << (15 - i_bit_lengths));
+            
+            huff_tbl.code_lengths[symbol_id] = length;
             huff_tbl.codes[symbol_id] = code_start;
+            
             for (size_t i_lut = code_start; i_lut < code_end; ++i_lut) {
                 huff_tbl.left_shifted_code_lut[i_lut].length = i_bit_lengths + 1;
                 huff_tbl.left_shifted_code_lut[i_lut].symbol = huff_tbl.symbols[symbol_id];
@@ -582,7 +562,10 @@ void parse_huffman_table(FILE* file, jpeg_state_t* state) {
         state->huffman_tables_ac = realloc(state->huffman_tables_ac, state->n_huffman_tables_ac * sizeof(jpeg_huffman_table_decoded_t));
         state->huffman_tables_ac[state->n_huffman_tables_ac - 1] = huff_tbl;
     }
-    else ERROR("Invalid huffman table class");
+    else {
+        ERROR("Invalid huffman table class");
+    }
+
     state->has_huff_tbl = 1;
 
     #if DEBUG_VERBOSE
@@ -620,7 +603,6 @@ void parse_start_of_scan(FILE* file, jpeg_state_t* state) {
     read_u8(file, &header.successive_approximation);
 
     header.components = components;
-
     state->start_of_scan = header;
     state->image_data_start = ftell(file);
     state->has_sos = 1;
@@ -639,49 +621,46 @@ void parse_start_of_scan(FILE* file, jpeg_state_t* state) {
 }
 
 void bit_stream_init(bit_stream_t* stream) {
-    memset(stream->scan_buffer, 0, sizeof(stream->scan_buffer));
-    stream->scan_buffer_cursor = 0;
-    stream->end_at_index = sizeof(stream->scan_buffer); // we never get to this index
-    stream->n_bits_ready = 0;
-    stream->curr_byte_bits_left = 0;
-    stream->curr_byte = 0;
-    stream->bit_peek_buffer = 0;
+    memset(stream, 0, sizeof(*stream));
+
+    // scan buffer cursor will never reach this index --> keep streaming data
+    stream->end_at_index = sizeof(stream->scan_buffer);
 }
 
 void bit_stream_get_byte(FILE* file, bit_stream_t* stream) {
-    // get byte, if we have any
     int prev_was_marker = 0;
     while (1) {
+        // if the buffer cursor looped around, load a new chunk of data into the buffer
         if (stream->scan_buffer_cursor == 0) {
             size_t read_bytes = fread(&stream->scan_buffer[stream->scan_buffer_cursor], 1, sizeof(stream->scan_buffer), file);
 
             if (read_bytes != sizeof(stream->scan_buffer)) {
-                stream->end_at_index = read_bytes;
+                stream->end_at_index = read_bytes; // end of scan in sight!
             }
         }
 
-        if (stream->scan_buffer_cursor >= stream->end_at_index) return;
+        if (stream->scan_buffer_cursor >= stream->end_at_index) return; // end of file
+
         stream->curr_byte = stream->scan_buffer[stream->scan_buffer_cursor];
         stream->scan_buffer_cursor = (stream->scan_buffer_cursor + 1) % sizeof(stream->scan_buffer);
-        if (prev_was_marker) {
-            if (stream->curr_byte == JPEG_MARKER_END_OF_IMAGE) {
-                return;
-            }
-            if (stream->curr_byte != 0x00) {
-                ERROR("Unexpected marker");
-            }
+        
+        // handle markers
+        if (prev_was_marker) { 
+            if (stream->curr_byte == JPEG_MARKER_END_OF_IMAGE) return;
+            if (stream->curr_byte != 0x00) ERROR("Unexpected marker");
             stream->curr_byte = 0xFF;
         }
         else if (stream->curr_byte == 0xFF) {
             prev_was_marker = 1;
             continue;
         }
+
         stream->curr_byte_bits_left = 8;
         break;
     }
 }
 
-#if 0
+#if 0 // broken attempt
 void bit_stream_refill(FILE* file, bit_stream_t* stream) {
     while (stream->n_bits_ready < 64) {
         if (stream->curr_byte_bits_left == 0) {
@@ -695,38 +674,12 @@ void bit_stream_refill(FILE* file, bit_stream_t* stream) {
         stream->bit_peek_buffer |= bit;
         
         stream->n_bits_ready += stream->curr_byte_bits_left;
+        
         stream->curr_byte_bits_left = 0;
     }
 }
-#elif 1 // chatgpt
-void bit_stream_refill(FILE* file, bit_stream_t* stream) {
-    while (stream->n_bits_ready < 64) {
-        if (stream->curr_byte_bits_left == 0) {
-            bit_stream_get_byte(file, stream);
-            if (stream->curr_byte_bits_left == 0) break; // EOF guard if needed
-        }
+#elif 0 // todo: figure out the bit stream situation
 
-        // take as many bits as possible from curr_byte in one go
-        uint32_t need = 64 - stream->n_bits_ready;
-        uint32_t take = stream->curr_byte_bits_left < need ? stream->curr_byte_bits_left : need;
-        if (stream->curr_byte_bits_left < need) {
-            take = stream->curr_byte_bits_left;
-        } else {
-            take = need;
-        }
-
-        // extract top 'take' bits from curr_byte
-        uint8_t shift = 8 - take;
-        uint64_t bits = (uint64_t)((stream->curr_byte >> shift) & ((1u << take) - 1u));
-
-        stream->bit_peek_buffer = (stream->bit_peek_buffer << take) | bits;
-        stream->n_bits_ready += take;
-
-        // consume those bits
-        stream->curr_byte <<= take;
-        stream->curr_byte_bits_left -= take;
-    }
-}
 #else
 void bit_stream_refill(FILE* file, bit_stream_t* stream) {
     while (stream->n_bits_ready < 64) {
@@ -771,6 +724,16 @@ int32_t bit_stream_read_value(FILE* file, bit_stream_t* stream, size_t n_bits) {
     return value;
 }
 
+void entropy_decode(FLOAT *restrict block, jpeg_state_t* state) {
+    const size_t n_values = (BLOCK_RES * BLOCK_RES);
+
+    for (size_t i = 0; i < n_values; ++i) {
+        ((FLOAT*)state->scratch_buffer)[i] = block[lut_zigzag[i]];        
+    }
+
+    memcpy(block, state->scratch_buffer, (BLOCK_RES * BLOCK_RES) * sizeof(FLOAT));
+}
+
 void dequantize(FLOAT *restrict block, uint8_t* quant) {
     for (size_t i = 0; i < (BLOCK_RES * BLOCK_RES); ++i) {
         block[i] *= (FLOAT)quant[i];
@@ -785,6 +748,13 @@ void generate_luts(jpeg_state_t* state) {
         }
     }
 
+    typedef enum {
+        ENTROPY_DEC_STEP_NONE = 0,
+        ENTROPY_DEC_STEP_RIGHT_ELSE_DOWN,
+        ENTROPY_DEC_STEP_DOWN_LEFT,
+        ENTROPY_DEC_STEP_DOWN_ELSE_RIGHT,
+        ENTROPY_DEC_STEP_UP_RIGHT,
+    } jpeg_entropy_decoding_step_t;
     jpeg_entropy_decoding_step_t curr_step = ENTROPY_DEC_STEP_RIGHT_ELSE_DOWN;
     const int n_values = BLOCK_RES * BLOCK_RES;
     const size_t edge = BLOCK_RES - 1;
@@ -792,7 +762,6 @@ void generate_luts(jpeg_state_t* state) {
     size_t y = 0;
 
     for (int i = 0; i < n_values; ++i) {
-        // write
         const size_t dst_i = (y * BLOCK_RES) + x;
         lut_zigzag[dst_i] = i;
 
@@ -825,75 +794,34 @@ void generate_luts(jpeg_state_t* state) {
     state->has_luts = 1;
 }
 
-#define NAIVE_DCT 1
-#define AAN 0
-
-#if NAIVE_DCT
-void idct_1d(const FLOAT *restrict in, FLOAT *restrict out) {
-    const float inv_n = 1.0f / (float)BLOCK_RES;
-    const float scale = sqrtf(2.0f * inv_n);
-    const float scale0 = sqrtf(inv_n);
-
-    for (int x = 0; x < BLOCK_RES; ++x) {
-        FLOAT sum = 0.0;
-        for (int u = 0; u < BLOCK_RES; ++u) {
-            const float c = (u == 0) ? scale0 : scale;
-            // sum += c * in[u] * cosf((2.0*(FLOAT)x + 1.0) * (FLOAT)u * pi / (2.0*BLOCK_RES));
-            sum += c * in[u] * lut_dct[(BLOCK_RES * u) + x];
-        }
-        out[x] = sum;
-    }
-}
-
-void idct_2d(FLOAT *restrict block, jpeg_state_t* state) {
-    FLOAT *restrict tmp = (FLOAT*)state->scratch_buffer;
-
-    for (int r = 0; r < BLOCK_RES; ++r) {
-        idct_1d(&block[r * BLOCK_RES], &tmp[r * BLOCK_RES]);
-    }
-
-    FLOAT col_in[BLOCK_RES];
-    FLOAT col_out[BLOCK_RES];
-    for (int c = 0; c < BLOCK_RES; ++c) {
-        for (int r = 0; r < BLOCK_RES; r++) col_in[r] = tmp[(r * BLOCK_RES) + c];
-        idct_1d(col_in, col_out);
-        for (int r = 0; r < BLOCK_RES; r++) tmp[(r * BLOCK_RES) + c] = col_out[r];
-    }
-
-    // todo: feels ugly, maybe fix?
-    memcpy(block, tmp, BLOCK_RES * BLOCK_RES * sizeof(FLOAT));
-}
-#elif AAN
 void idct_2d(FLOAT *restrict block, jpeg_state_t *state) {
-    const int N = BLOCK_RES; // typically 8
-    FLOAT workspace[BLOCK_RES * BLOCK_RES];
-
-    // Pass 1: columns
-    for (int x = 0; x < N; ++x) {
-        for (int y = 0; y < N; ++y) {
+    FLOAT *restrict scratch_buffer = (FLOAT*)state->scratch_buffer;
+    // colums
+    #pragma GCC ivdep
+    for (int x = 0; x < BLOCK_RES; ++x) {
+        for (int y = 0; y < BLOCK_RES; ++y) {
             FLOAT sum = 0.0f;
-            for (int u = 0; u < N; ++u) {
-                FLOAT c = (u == 0) ? sqrtf(1.0f / N) : sqrtf(2.0f / N);
-                sum += c * block[u * N + x] * cosf((2.0f * y + 1.0f) * u * pi / (2.0f * N));
+            for (int u = 0; u < BLOCK_RES; ++u) {
+                FLOAT c = (u == 0) ? sqrtf(1.0f / BLOCK_RES) : sqrtf(2.0f / BLOCK_RES);
+                sum += c * block[u * BLOCK_RES + x] * lut_dct[(BLOCK_RES * u) + y];
             }
-            workspace[y * N + x] = sum;
+            scratch_buffer[y * BLOCK_RES + x] = sum;
         }
     }
 
-    // Pass 2: rows
-    for (int y = 0; y < N; ++y) {
-        for (int x = 0; x < N; ++x) {
+    // rows
+    #pragma GCC ivdep
+    for (int y = 0; y < BLOCK_RES; ++y) {
+        for (int x = 0; x < BLOCK_RES; ++x) {
             FLOAT sum = 0.0f;
-            for (int u = 0; u < N; ++u) {
-                FLOAT c = (u == 0) ? sqrtf(1.0f / N) : sqrtf(2.0f / N);
-                sum += c * workspace[y * N + u] * cosf((2.0f * x + 1.0f) * u * pi / (2.0f * N));
+            for (int u = 0; u < BLOCK_RES; ++u) {
+                FLOAT c = (u == 0) ? sqrtf(1.0f / BLOCK_RES) : sqrtf(2.0f / BLOCK_RES);
+                sum += c * scratch_buffer[y * BLOCK_RES + u] * lut_dct[(BLOCK_RES * u) + x];
             }
-            block[y * N + x] = sum;
+            block[y * BLOCK_RES + x] = sum;
         }
     }
 }
-
-#endif
 
 void debug_block(const FLOAT* block) {
 #if DEBUG_VERBOSE
@@ -1010,7 +938,7 @@ void write_bmp(const char* path, const rgb8_t* img, int w, int h) {
     bmpinfoheader[10] = (unsigned char)(       h>>16);
     bmpinfoheader[11] = (unsigned char)(       h>>24);
 
-    FILE* f = fopen("img.bmp","wb");
+    FILE* f = fopen(path,"wb");
     fwrite(bmpfileheader,1,14,f);
     fwrite(bmpinfoheader,1,40,f);
     for(int i=0; i<h; i++) {
@@ -1033,9 +961,6 @@ void parse_image_data(FILE* file, jpeg_state_t* state) {
 
     const size_t n_mcu_y = (state->start_of_frame.height + state->mcu_height - 1) / state->mcu_height;
     const size_t n_mcu_x = (state->start_of_frame.width + state->mcu_width - 1) / state->mcu_width;
-    const size_t n_mcu = n_mcu_x * n_mcu_y;
-
-    const size_t mcu_size = state->mcu_width * state->mcu_height;
 
     const size_t out_w = state->start_of_frame.width;
     const size_t out_h = state->start_of_frame.height;
@@ -1047,8 +972,6 @@ void parse_image_data(FILE* file, jpeg_state_t* state) {
     // Allocate raw planes
     FLOAT* image_raw[256] = {NULL};
     for (size_t comp_id = 0; comp_id < state->start_of_scan.n_components; ++comp_id) {
-        jpeg_component_t component_huff = state->start_of_scan.components[comp_id];
-        jpeg_channel_t component_info = state->components[(size_t)component_huff.id];
         image_raw[comp_id] = MALLOC(raw_size * sizeof(FLOAT));
         memset(image_raw[comp_id], 0, raw_size * sizeof(FLOAT));
     }
@@ -1131,7 +1054,6 @@ void parse_image_data(FILE* file, jpeg_state_t* state) {
     }
 
     // components -> RGB
-    jpeg_component_t* comps = state->start_of_scan.components;
     int index_y = -1;
     int index_cb = -1;
     int index_cr = -1;
@@ -1148,49 +1070,57 @@ void parse_image_data(FILE* file, jpeg_state_t* state) {
         }
     }
 
-    rgb8_t* out_image = MALLOC(out_w * out_h * sizeof(rgb8_t));
+
+    // todo: handle these
+    (void)index_i;
+    (void)index_q;
+
+    rgb8_t *restrict out_image = MALLOC(out_w * out_h * sizeof(rgb8_t));
 
     // Grayscale with a single Y component
     if (state->start_of_scan.n_components == 1 && index_y >= 0) {
         jpeg_component_t component_huff = state->start_of_scan.components[0];
         jpeg_channel_t component_info = state->components[(size_t)component_huff.id];
 
-        const size_t raw_width = BLOCK_RES * n_mcu_x * component_info.blocks_per_mcu.width;
-        const size_t raw_height = BLOCK_RES * n_mcu_y * component_info.blocks_per_mcu.height;
+        const FLOAT *restrict image = image_raw[0];
 
+        size_t pixel_index = 0;
+        #pragma GCC ivdep
         for (size_t y = 0; y < out_h; ++y) {
             for (size_t x = 0; x < out_w; ++x) {
                 // convert to u8
-                const size_t raw_index = (y * raw_width) + x;
-                const FLOAT raw_value = image_raw[0][raw_index];
+                const FLOAT raw_value = image[pixel_index++];
                 uint8_t value = 0;
                 if (raw_value > 255.0) value = 255;
-                else if (raw_value > 0.0) value = (uint8_t)round(raw_value);
+                else if (raw_value > 0.0) value = (uint8_t)raw_value;
 
                 // store to output
                 const size_t out_index = (y * out_w) + x;
-                out_image[out_index].r = value;
-                out_image[out_index].g = value;
-                out_image[out_index].b = value;
+                out_image[out_index] = (rgb8_t){ // <--- how is this a complicated access pattern
+                    .r = value,
+                    .g = value,
+                    .b = value,
+                };
             }
+            pixel_index += (raw_w - out_w);
         }
     }
 
     // YCbCr
     else if (state->start_of_scan.n_components == 3 && index_y >= 0 && index_cb >= 0 && index_cr >= 0) {
+        const FLOAT *restrict image_y_ = image_raw[index_y];
+        const FLOAT *restrict image_cb = image_raw[index_cb];
+        const FLOAT *restrict image_cr = image_raw[index_cr];
+        size_t pixel_index = 0;
         for (size_t y = 0; y < out_h; ++y) {
             for (size_t x = 0; x < out_w; ++x) {
-                const size_t pixel_index = (y * raw_w) + x;
-                const FLOAT y_ = image_raw[index_y][pixel_index];
-                const FLOAT cb = image_raw[index_cb][pixel_index];
-                const FLOAT cr = image_raw[index_cr][pixel_index];
-                // rgb8_t pixel = (rgb8_t) {
-                //     .r = (uint8_t)fmin(255.0, fmax(0.0, y_)),
-                //     .g = (uint8_t)fmin(255.0, fmax(0.0, cb)),
-                //     .b = (uint8_t)fmin(255.0, fmax(0.0, cr)),
-                // };
+                const FLOAT y_ = image_y_[pixel_index];
+                const FLOAT cb = image_cb[pixel_index];
+                const FLOAT cr = image_cr[pixel_index];
                 out_image[(y * out_w) + x] = ycbcr_to_rgb(y_, cb, cr);
+                ++pixel_index;
             }
+            pixel_index += (raw_w - out_w);
         }
     }
 
@@ -1208,6 +1138,7 @@ void cleanup(jpeg_state_t* state) {
     memset(state, 0, sizeof(jpeg_state_t));
 }
 
+#if STANDALONE
 int main(int argc, char** argv) {
     // parse arguments
     if (argc != 3) {
@@ -1215,7 +1146,7 @@ int main(int argc, char** argv) {
         // return 1;
     }
     
-    const char* in_path = "D:/Projects/Offline/C/jpeg_decoder/test assets/test1.jpg";
+    const char* in_path = "./test assets/test12.jpg";
     // const char* in_path = argv[1];
     // const char* out_path = argv[2];
 
@@ -1234,7 +1165,7 @@ int main(int argc, char** argv) {
     #define LOOP_COUNT (256)
     for (size_t _loops = 1; _loops < (LOOP_COUNT + 1); ++_loops) {
     fseek(in_file, 0, SEEK_SET);
-    // printf("%6i / %i\r", _loops, LOOP_COUNT);
+    printf("%6i / %i\r", _loops, LOOP_COUNT);
     #endif
     state.scratch_buffer = MALLOC(BLOCK_RES * BLOCK_RES * sizeof(FLOAT));
     // handle each section
@@ -1275,3 +1206,8 @@ int main(int argc, char** argv) {
 
     return 0;
 }
+#endif
+
+#if MIV_LIBRARY
+
+#endif
