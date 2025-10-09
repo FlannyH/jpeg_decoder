@@ -971,7 +971,6 @@ void parse_image_data(FILE* file, jpeg_state_t* state) {
     }
     FLOAT* block_scratch = MALLOC(BLOCK_RES * BLOCK_RES * sizeof(FLOAT));
     
-    // todo: maybe the blocks themselves can be contiguous for cache reasons (one 8x8 block fits in a single 64 byte cache line)
     FLOAT dc_prev[256] = {0.0};
     for (size_t mcu_y = 0; mcu_y < n_mcu_y; ++mcu_y) {
         for (size_t mcu_x = 0; mcu_x < n_mcu_x; ++mcu_x) {
