@@ -3,6 +3,8 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <math.h>
+#include <threads.h>
+#include <time.h>
 
 #if defined(_MSC_VER)
 #define ALIGN(a) __declspec(align(a))
@@ -10,11 +12,10 @@
 #define ALIGN(a) __attribute__((aligned(a)))
 #endif
 
+#define DEBUG_ERROR 1
 #define DEBUG_VERBOSE 0
 #define DEBUG_MEMORY 0
-#define PROFILING 1
-#define STANDALONE 1
-#define MIV_LIBRARY 0
+#define PROFILING 0
 #define FLOAT float
 #define pi 3.141592653589793
 
@@ -22,12 +23,28 @@
 FLOAT ALIGN(128) lut_dct[BLOCK_RES * BLOCK_RES] = {0};
 int ALIGN(128) lut_zigzag[BLOCK_RES * BLOCK_RES]  = {0};
 
+thread_local char error_buffer[256];
+thread_local size_t error_length = 0;
+
 #if DEBUG
 #define ERROR(err) { printf("error: %s:%i: %s\n", __FILE__, __LINE__, err); exit(-2); }
 #define TODO() { printf("todo: %s:%i\n", __FILE__, __LINE__); exit(-1); }
+
+#elif DEBUG_ERROR
+#define ERROR(err) { \
+    strncpy(error_buffer, err, sizeof(error_buffer)); \
+    error_length = strlen(error_buffer); \
+    printf("error: %s\n", error_buffer); \
+}
+#define TODO() {}
+
 #else
-#define ERROR(err) {}
-#define TODO()
+#define ERROR(err) { \
+    strncpy(error_buffer, err, sizeof(error_buffer)); \
+    error_length = strlen(error_buffer); \
+}
+#define TODO() {}
+
 #endif
 
 #define MAX_ALLOC_COUNT 256
@@ -328,15 +345,15 @@ void read_bytes(FILE* file, void* dest, size_t size) {
 }
 
 void parse_start_of_image(void) {
-    #if DEBUG_VERBOSE
+#if DEBUG_VERBOSE
         printf("START OF IMAGE\n");
-    #endif
+#endif
 }
 
 void parse_end_of_image(void) {
-    #if DEBUG_VERBOSE
+#if DEBUG_VERBOSE
         printf("END OF IMAGE\n");
-    #endif
+#endif
 }
 
 void parse_jfif_app0(FILE* file, jpeg_state_t* state) {
@@ -344,12 +361,12 @@ void parse_jfif_app0(FILE* file, jpeg_state_t* state) {
     read_u16(file, &header.length, JPEG_BYTE_ORDER_BE);
     read_bytes(file, &header.identifier, sizeof(header.identifier));
 
-    #if DEBUG_VERBOSE
+#if DEBUG_VERBOSE
         printf("APP0:\n");
         printf("\t.length     = %i\n", header.length);
         printf("\t.identifier = %.*s", (int)sizeof(header.identifier), header.identifier);
         printf(":\n");
-    #endif
+#endif
 
     if (strncmp(header.identifier, "JFIF", 4) == 0) {
         jpeg_app0_jfif_t* jfif = &state->jfif;
@@ -373,7 +390,7 @@ void parse_jfif_app0(FILE* file, jpeg_state_t* state) {
 
         state->has_jfif = 1;
         
-        #if DEBUG_VERBOSE
+#if DEBUG_VERBOSE
             printf("\t\t.jfif_version_major = %i\n", jfif->jfif_version_major);
             printf("\t\t.jfif_version_minor = %i\n", jfif->jfif_version_minor);
             printf("\t\t.density_units      = %i\n", jfif->density_units);
@@ -381,7 +398,7 @@ void parse_jfif_app0(FILE* file, jpeg_state_t* state) {
             printf("\t\t.density_h          = %i\n", jfif->density_h);
             printf("\t\t.thumbnail_w        = %i\n", jfif->thumbnail_w);
             printf("\t\t.thumbnail_h        = %i\n", jfif->thumbnail_h);
-        #endif
+#endif
     }
     else if (strncmp(header.identifier, "JFXX", 4) == 0) {
         jpeg_app0_jfxx_t* jfxx = &state->jfxx;
@@ -394,9 +411,9 @@ void parse_jfif_app0(FILE* file, jpeg_state_t* state) {
 
         state->has_jfxx = 1;
 
-        #if DEBUG_VERBOSE
+#if DEBUG_VERBOSE
             printf("\t\t.thumbnail_format   = %i\n", jfxx->thumbnail_format);
-        #endif
+#endif
     }
     else {
         ERROR("Invalid APP0 identifier");
@@ -416,14 +433,14 @@ void parse_jfif_app1(FILE* file, jpeg_state_t* state) {
 
     state->has_exif = 1;
 
-    #if DEBUG_VERBOSE
+#if DEBUG_VERBOSE
         printf("APP1:\n");
         printf("\t.length          = %i\n", state->exif.length);
         printf("\t.identifier      = %.*s\n", 5, (char*)state->exif.identifier);
         printf("\t.byte_order      = %.*s\n", 2, (char*)&state->exif.byte_order);
         printf("\t.tiff_identifier = %i\n", state->exif.tiff_identifier);
         printf("\t.ifd_offset      = %i\n", state->exif.ifd_offset);
-    #endif
+#endif
 }
 
 void parse_start_of_frame(FILE* file, jpeg_state_t* state) {
@@ -434,14 +451,14 @@ void parse_start_of_frame(FILE* file, jpeg_state_t* state) {
     read_u16(file, &header->width, JPEG_BYTE_ORDER_BE);
     read_u8(file, &header->n_components);
 
-    #if DEBUG_VERBOSE
+#if DEBUG_VERBOSE
         printf("START OF FRAME:\n");
         printf("\t.length         = %i\n", header->length);
         printf("\t.bits_per_pixel = %i\n", header->bits_per_pixel);
         printf("\t.height         = %i\n", header->height);
         printf("\t.width          = %i\n", header->width);
         printf("\t.n_components   = %i\n", header->n_components);
-    #endif
+#endif
 
     uint8_t smp_factor_max_w = 0;
     uint8_t smp_factor_max_h = 0;
@@ -459,12 +476,12 @@ void parse_start_of_frame(FILE* file, jpeg_state_t* state) {
             smp_factor_max_h = component.blocks_per_mcu.height;
         }
         
-        #if DEBUG_VERBOSE
+#if DEBUG_VERBOSE
             printf("\t\tCHANNEL %i:\n", (int)i);
             printf("\t\t\t.id              =  %i\n", component.id);
             printf("\t\t\t.blocks_per_mcu  =  %ix%i\n", component.blocks_per_mcu.width, component.blocks_per_mcu.height);
             printf("\t\t\t.quant_table_id  =  %i\n", component.quant_table_id);
-        #endif
+#endif
 
         state->components[(size_t)component.id] = component;
     }
@@ -474,9 +491,9 @@ void parse_start_of_frame(FILE* file, jpeg_state_t* state) {
     state->has_chn = 1;
     state->has_sof = 1;
 
-    #if DEBUG_VERBOSE
+#if DEBUG_VERBOSE
         printf("\t\tMCU size: %ix%i\n", (int)state->mcu_width, (int)state->mcu_height);
-    #endif
+#endif
 }
 
 void parse_quant_table(FILE* file, jpeg_state_t* state) {
@@ -495,7 +512,7 @@ void parse_quant_table(FILE* file, jpeg_state_t* state) {
 
     state->has_quant = 1;
 
-    #if DEBUG_VERBOSE
+#if DEBUG_VERBOSE
         printf("QUANT TABLE:\n");
         printf("\t.length          = %i\n", header.length);
         printf("\t.table_id        = %i\n", header.table_id);
@@ -505,7 +522,7 @@ void parse_quant_table(FILE* file, jpeg_state_t* state) {
             printf("%3i, ", state->quant_tables[table_id][i]);
         }
         printf("\n");
-    #endif
+#endif
 }
 
 void parse_huffman_table(FILE* file, jpeg_state_t* state) {
@@ -568,7 +585,7 @@ void parse_huffman_table(FILE* file, jpeg_state_t* state) {
 
     state->has_huff_tbl = 1;
 
-    #if DEBUG_VERBOSE
+#if DEBUG_VERBOSE
         printf("HUFFMAN TABLE:\n");
         printf("\t.length = %i\n", header.length);
         printf("\t.class  = %i\n", header.class);
@@ -586,7 +603,7 @@ void parse_huffman_table(FILE* file, jpeg_state_t* state) {
             }
             printf("\t(%i)\n", huff_tbl.codes[i]);
         }
-    #endif
+#endif
 }
 
 void parse_start_of_scan(FILE* file, jpeg_state_t* state) {
@@ -607,7 +624,7 @@ void parse_start_of_scan(FILE* file, jpeg_state_t* state) {
     state->image_data_start = ftell(file);
     state->has_sos = 1;
 
-    #if DEBUG_VERBOSE
+#if DEBUG_VERBOSE
         printf("START OF SCAN:\n");
         printf("\t.length                   = %i\n", header.length);
         printf("\t.n_components             = %i\n", header.n_components);
@@ -617,7 +634,7 @@ void parse_start_of_scan(FILE* file, jpeg_state_t* state) {
         printf("\t.spectral_selection_min   = %i\n", header.spectral_selection_min);  
         printf("\t.spectral_selection_max   = %i\n", header.spectral_selection_max)  ;
         printf("\t.successive_approximation = %i\n", header.successive_approximation);
-    #endif
+#endif
 }
 
 void bit_stream_init(bit_stream_t* stream) {
@@ -660,27 +677,7 @@ void bit_stream_get_byte(FILE* file, bit_stream_t* stream) {
     }
 }
 
-#if 0 // broken attempt
-void bit_stream_refill(FILE* file, bit_stream_t* stream) {
-    while (stream->n_bits_ready < 64) {
-        if (stream->curr_byte_bits_left == 0) {
-            bit_stream_get_byte(file, stream);
-        }
-
-        const uint64_t bit = stream->curr_byte >> (8 - stream->curr_byte_bits_left);
-        stream->curr_byte <<= stream->curr_byte_bits_left;
-        
-        stream->bit_peek_buffer <<= stream->curr_byte_bits_left;
-        stream->bit_peek_buffer |= bit;
-        
-        stream->n_bits_ready += stream->curr_byte_bits_left;
-        
-        stream->curr_byte_bits_left = 0;
-    }
-}
-#elif 0 // todo: figure out the bit stream situation
-
-#else
+// todo: optimize this
 void bit_stream_refill(FILE* file, bit_stream_t* stream) {
     while (stream->n_bits_ready < 64) {
         if (stream->curr_byte_bits_left == 0) {
@@ -696,7 +693,6 @@ void bit_stream_refill(FILE* file, bit_stream_t* stream) {
         ++stream->n_bits_ready;
     }
 }
-#endif
 
 void bit_stream_advance(FILE* file, bit_stream_t* stream, size_t n_bits) {
     stream->n_bits_ready -= n_bits;
@@ -797,7 +793,6 @@ void generate_luts(jpeg_state_t* state) {
 void idct_2d(FLOAT *restrict block, jpeg_state_t *state) {
     FLOAT *restrict scratch_buffer = (FLOAT*)state->scratch_buffer;
     // colums
-    #pragma GCC ivdep
     for (int x = 0; x < BLOCK_RES; ++x) {
         for (int y = 0; y < BLOCK_RES; ++y) {
             FLOAT sum = 0.0f;
@@ -810,7 +805,6 @@ void idct_2d(FLOAT *restrict block, jpeg_state_t *state) {
     }
 
     // rows
-    #pragma GCC ivdep
     for (int y = 0; y < BLOCK_RES; ++y) {
         for (int x = 0; x < BLOCK_RES; ++x) {
             FLOAT sum = 0.0f;
@@ -868,17 +862,17 @@ void decode_block(FILE* file, bit_stream_t* stream, jpeg_state_t* state, jpeg_co
         bit_stream_advance(file, stream, (size_t)lut_entry.length);
 
         if (lut_entry.symbol == 0x00) { // end of block marker
-            #if DEBUG_VERBOSE
+#if DEBUG_VERBOSE
             printf("end of block\n");
-            #endif
+#endif
             while (block_cursor < res2) block[block_cursor++] = 0;
             break; // done with this block
         }
 
         if (lut_entry.symbol == 0xF0) {
-            #if DEBUG_VERBOSE
+#if DEBUG_VERBOSE
             printf("16x 0\n");
-            #endif
+#endif
             for (size_t i = 0; i < 16; ++i) {
                 block[block_cursor++] = 0;
             }
@@ -896,10 +890,10 @@ void decode_block(FILE* file, bit_stream_t* stream, jpeg_state_t* state, jpeg_co
 
         block[block_cursor++] = (FLOAT)value;
         
-        #if DEBUG_VERBOSE
+#if DEBUG_VERBOSE
         printf("%ix 0\n", run_length);
         printf("%i\n", value);
-        #endif
+#endif
     }
 
     dequantize(block, quant);
@@ -981,9 +975,9 @@ void parse_image_data(FILE* file, jpeg_state_t* state) {
     FLOAT dc_prev[256] = {0.0};
     for (size_t mcu_y = 0; mcu_y < n_mcu_y; ++mcu_y) {
         for (size_t mcu_x = 0; mcu_x < n_mcu_x; ++mcu_x) {
-            #if DEBUG_VERBOSE
+#if DEBUG_VERBOSE
             printf("mcu (%i, %i)\n", mcu_x, mcu_y);
-            #endif
+#endif
 
             // Decode block -> mcu_scratch
             for (size_t comp_id = 0; comp_id < state->start_of_scan.n_components; ++comp_id) {
@@ -994,22 +988,20 @@ void parse_image_data(FILE* file, jpeg_state_t* state) {
                 const size_t width = (size_t)component_info.blocks_per_mcu.width;
                 const size_t height = (size_t)component_info.blocks_per_mcu.height;
 
-                #if DEBUG_VERBOSE
+#if DEBUG_VERBOSE
                 printf("\tBLOCK MCU: %02X\n", component_info.blocks_per_mcu.u8);
-                #endif
+#endif
                 
                 for (size_t block_y = 0; block_y < height; ++block_y) {
                     for (size_t block_x = 0; block_x < width; ++block_x) {
-                        #if DEBUG_VERBOSE
-                        #endif
                         decode_block(file, &stream, state, component_huff, quant, block_scratch, BLOCK_RES, &dc_prev[comp_id]);
 
                         // Place in raw buffer
                         const size_t block_offset_x = (mcu_x * width * BLOCK_RES) + (block_x * BLOCK_RES);
                         const size_t block_offset_y = (mcu_y * height * BLOCK_RES) + (block_y * BLOCK_RES);
-                        #if DEBUG_VERBOSE
+#if DEBUG_VERBOSE
                         printf("\t\tblock (%i, %i) at offset (%i, %i)\n", block_x, block_y, block_offset_x, block_offset_y);
-                        #endif
+#endif
 
                         for (size_t pixel_y = 0; pixel_y < BLOCK_RES; ++pixel_y) {
                             for (size_t pixel_x = 0; pixel_x < BLOCK_RES; ++pixel_x) {
@@ -1079,13 +1071,9 @@ void parse_image_data(FILE* file, jpeg_state_t* state) {
 
     // Grayscale with a single Y component
     if (state->start_of_scan.n_components == 1 && index_y >= 0) {
-        jpeg_component_t component_huff = state->start_of_scan.components[0];
-        jpeg_channel_t component_info = state->components[(size_t)component_huff.id];
-
         const FLOAT *restrict image = image_raw[0];
 
         size_t pixel_index = 0;
-        #pragma GCC ivdep
         for (size_t y = 0; y < out_h; ++y) {
             for (size_t x = 0; x < out_w; ++x) {
                 // convert to u8
@@ -1143,12 +1131,11 @@ int main(int argc, char** argv) {
     // parse arguments
     if (argc != 3) {
         printf("Usage: jpeg_dec <input> <output>\n");
-        // return 1;
+        return 1;
     }
     
-    const char* in_path = "./test assets/test12.jpg";
-    // const char* in_path = argv[1];
-    // const char* out_path = argv[2];
+    const char* in_path = argv[1];
+    const char* out_path = argv[2];
 
     // open input file
     FILE* in_file = fopen(in_path, "rb");
@@ -1161,12 +1148,13 @@ int main(int argc, char** argv) {
     jpeg_state_t state = {0};
     generate_luts(&state);
 
-    #if PROFILING
-    #define LOOP_COUNT (256)
+#if PROFILING
+#define LOOP_COUNT (256)
     for (size_t _loops = 1; _loops < (LOOP_COUNT + 1); ++_loops) {
     fseek(in_file, 0, SEEK_SET);
-    printf("%6i / %i\r", _loops, LOOP_COUNT);
-    #endif
+    printf("%6i / %i\r", (int)_loops, LOOP_COUNT);
+#endif
+    
     state.scratch_buffer = MALLOC(BLOCK_RES * BLOCK_RES * sizeof(FLOAT));
     // handle each section
     jpeg_marker_t marker;
@@ -1184,30 +1172,131 @@ int main(int argc, char** argv) {
         case JPEG_MARKER_JFIF_APP1:      parse_jfif_app1(in_file, &state); break;
         default:                         ERROR("Unknown marker"); break;
         }
+
+        if (error_length > 0) {
+            return 3;
+        }
         
         continue;
     }
 
     parse_image_data(in_file, &state);
 
-    #if PROFILING
+#if PROFILING
     cleanup(&state);
     }
-    #else
-    write_bmp("test.bmp", state.out_image, state.out_width, state.out_height);
+    (void)out_path;
+#else
+    write_bmp(out_path, state.out_image, state.out_width, state.out_height);
+#if DEBUG_VERBOSE
     printf("wrote bmp\n");
+#endif
     cleanup(&state);
-    #endif
+#endif
 
 
-    #if DEBUG_MEMORY
+#if DEBUG_MEMORY
     mem_leak_check();
-    #endif
+#endif
 
     return 0;
 }
 #endif
 
 #if MIV_LIBRARY
+#include "MIV.h"
+
+int64_t registration_procedure(Provided_Registration_Entry* registration) {
+    registration->name_filetype = to_string("JPEG Image");
+    registration->procedure_prefix = to_string("jpeg_");
+    registration->extension = to_string("JPG");
+    registration->magic_number = to_string("\xFF\xD8");
+    registration->has_magic_number = 1;
+    registration->extension_is_case_sensitive = 0;
+    registration->has_settings = 0;
+    return 0;
+}
+
+string jpeg_pre_render(Pre_Rendering_Info* pre_info) {
+    if (pre_info->user_ptr == NULL) {
+        pre_info->user_ptr = MALLOC(sizeof(jpeg_state_t));
+    }
+    jpeg_state_t* state = (jpeg_state_t*)pre_info->user_ptr;
+
+    fseek(pre_info->fileptr, 0, SEEK_SET);
+    generate_luts(state);
+    state->scratch_buffer = MALLOC(BLOCK_RES * BLOCK_RES * sizeof(FLOAT));
+
+    jpeg_marker_t marker;
+    while (fread(&marker, sizeof(jpeg_marker_t), 1, pre_info->fileptr)) {
+        if (marker.magic != JPEG_MARKER_MAGIC) break;
+
+        switch (marker.type) {
+        case JPEG_MARKER_START_OF_FRAME: parse_start_of_frame(pre_info->fileptr, state); break;
+        case JPEG_MARKER_HUFFMAN_TABLE:  parse_huffman_table(pre_info->fileptr, state); break;
+        case JPEG_MARKER_START_OF_IMAGE: parse_start_of_image(); break;
+        case JPEG_MARKER_END_OF_IMAGE:   parse_end_of_image(); break;
+        case JPEG_MARKER_START_OF_SCAN:  parse_start_of_scan(pre_info->fileptr, state); break;
+        case JPEG_MARKER_QUANT_TABLE:    parse_quant_table(pre_info->fileptr, state); break;
+        case JPEG_MARKER_JFIF_APP0:      parse_jfif_app0(pre_info->fileptr, state); break;
+        case JPEG_MARKER_JFIF_APP1:      parse_jfif_app1(pre_info->fileptr, state); break;
+        default:                         ERROR("Unknown marker"); break;
+        }
+
+        if (error_length > 0) {
+            return (string) {
+                .count = error_length,
+                .data = (uint8_t*)&error_buffer[0]
+            };
+        }
+
+        continue;
+    }
+
+    pre_info->width = state->start_of_frame.width;
+    pre_info->height = state->start_of_frame.height;
+    pre_info->bit_depth = 8;
+    pre_info->channels = 3;
+    pre_info->metadata_count = 0; // todo
+    return (string){0};
+}
+
+string jpeg_render(Pre_Rendering_Info* pre_info, Rendering_Info* render_info) {
+    jpeg_state_t* state = (jpeg_state_t*)pre_info->user_ptr;
+    fseek(pre_info->fileptr, state->image_data_start, SEEK_SET);
+    
+    parse_image_data(pre_info->fileptr, state);
+    if (error_length > 0) {
+        return (string){
+            .count = error_length, 
+            .data = (uint8_t*)&error_buffer
+        };
+    }
+
+    if (render_info->buffer_width != (int64_t)state->out_width) return to_string("render_info->buffer_width != state.out_width");
+    if (render_info->buffer_height != (int64_t)state->out_height) return to_string("render_info->buffer_height != state.out_height");
+
+    for (int i = 0; i < render_info->buffer_count; ++i) {
+        render_info->buffer[i][0] = state->out_image[i].r;
+        render_info->buffer[i][1] = state->out_image[i].g;
+        render_info->buffer[i][2] = state->out_image[i].b;
+        render_info->buffer[i][3] = 255;
+    }
+
+    return (string){0};
+}
+
+string jpeg_cleanup(Pre_Rendering_Info* pre_info) {
+    if (pre_info->user_ptr != NULL) {
+        cleanup((jpeg_state_t*)pre_info->user_ptr);
+        pre_info->user_ptr = NULL;
+    }
+
+#if DEBUG_MEMORY
+    mem_leak_check();
+#endif
+
+    return (string){0};
+}
 
 #endif
