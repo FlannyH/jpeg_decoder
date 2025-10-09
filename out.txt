@@ -1,2 +1,0 @@
-gcc -Wall -Wextra -std=c11 -O3 -ftree-vectorize -march=native -fopt-info-vec-all jpeg_dec.c -o build/jpeg_dec.exe
-objcopy --only-keep-debug jpeg_dec.exe jpeg_dec.debug
