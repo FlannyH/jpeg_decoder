@@ -52,15 +52,43 @@ thread_local size_t error_length = 0;
 
 /// Enums
 typedef enum {
-    JPEG_MARKER_START_OF_FRAME = 0xC0, // metadata
+    // implemented
+    JPEG_MARKER_START_OF_FRAME0 = 0xC0, // non-differential huffman-coded baseline DCT
     JPEG_MARKER_HUFFMAN_TABLE = 0xC4,
-    JPEG_MARKER_START_OF_IMAGE = 0xD8, // file magic
-    JPEG_MARKER_END_OF_IMAGE = 0xD9, // end of file
-    JPEG_MARKER_START_OF_SCAN = 0xDA, // start of image data
+    JPEG_MARKER_START_OF_IMAGE = 0xD8, // (file magic)
+    JPEG_MARKER_END_OF_IMAGE = 0xD9, 
+    JPEG_MARKER_START_OF_SCAN = 0xDA, // start of compressed image data
     JPEG_MARKER_QUANT_TABLE = 0xDB,
     JPEG_MARKER_JFIF_APP0 = 0xE0, // JFIF header
     JPEG_MARKER_JFIF_APP1 = 0xE1, // EXIF header
-    JPEG_MARKER_MAGIC = 0xFF, // each marker is preceded by this value
+    JPEG_MARKER_PREFIX = 0xFF, // prefix byte preceding every marker
+
+    // todo:
+    JPEG_MARKER_START_OF_FRAME1 = 0xC1,  // non-differential huffman-coded extended sequential DCT
+    JPEG_MARKER_START_OF_FRAME2 = 0xC2,  // non-differential huffman-coded progressive DCT
+    JPEG_MARKER_START_OF_FRAME3 = 0xC3,  // non-differential huffman-coded lossless (sequential)
+    JPEG_MARKER_START_OF_FRAME5 = 0xC5,  // differential huffman-coded sequential DCT
+    JPEG_MARKER_START_OF_FRAME6 = 0xC6,  // differential huffman-coded progressive DCT
+    JPEG_MARKER_START_OF_FRAME7 = 0xC7,  // differential huffman-coded lossless (sequential)
+    JPEG_MARKER_START_OF_FRAME9 = 0xC9,  // non-differential arithmetic-coded extended sequential DCT
+    JPEG_MARKER_START_OF_FRAME10 = 0xCA, // non-differential arithmetic-coded progressive DCT
+    JPEG_MARKER_START_OF_FRAME11 = 0xCB, // non-differential arithmetic-coded lossless (sequential)
+    JPEG_MARKER_START_OF_FRAME13 = 0xCD, // differential arithmetic-coded extended sequential DCT
+    JPEG_MARKER_START_OF_FRAME14 = 0xCE, // differential arithmetic-coded progressive DCT
+    JPEG_MARKER_START_OF_FRAME15 = 0xCF, // differential arithmetic-coded lossless (sequential)
+    JPEG_MARKER_DEF_ARITH_CODING = 0xCC, // arithetic coding conditions
+    JPEG_MARKER_RST0 = 0xD0, // restart marker 0
+    JPEG_MARKER_RST1 = 0xD1, // restart marker 1
+    JPEG_MARKER_RST2 = 0xD2, // restart marker 2
+    JPEG_MARKER_RST3 = 0xD3, // restart marker 3
+    JPEG_MARKER_RST4 = 0xD4, // restart marker 4
+    JPEG_MARKER_RST5 = 0xD5, // restart marker 5
+    JPEG_MARKER_RST6 = 0xD6, // restart marker 6
+    JPEG_MARKER_RST7 = 0xD7, // restart marker 7
+    JPEG_MARKER_COMMENT = 0xFE, // print verbose and move on
+    JPEG_MARKER_JFIF_APP2 = 0xE2, // icc color profile
+    JPEG_MARKER_RESET_INTERVAL = 0xDD,
+    JPEG_MARKER_LINE_COUNT = 0xDC,
 } jpeg_marker_type_t;
 
 typedef enum {
@@ -85,9 +113,16 @@ typedef enum {
     COMP_ID_Y = 1,
     COMP_ID_CB = 2,
     COMP_ID_CR = 3,
-    COMP_ID_I = 4,
-    COMP_ID_Q = 5,
+    COMP_ID_I = 4, // todo: does this exist?
+    COMP_ID_Q = 5, // todo: does this exist?
 } jpeg_component_id_t;
+
+typedef enum {
+    JPEG_SCAN_MODE_BASELINE = 0,
+    JPEG_SCAN_MODE_EXTENDED = 1,
+    JPEG_SCAN_MODE_PROGRESSIVE = 2,
+    JPEG_SCAN_MODE_LOSSLESS = 3,
+} jpeg_scan_mode_t;
 
 // Structs
 typedef struct {
@@ -347,19 +382,21 @@ void read_bytes(FILE* file, void* dest, size_t size) {
     }
 }
 
-void parse_start_of_image(void) {
+size_t parse_start_of_image(void) {
 #if DEBUG_VERBOSE
         printf("START OF IMAGE\n");
 #endif
+    return 0;
 }
 
-void parse_end_of_image(void) {
+size_t parse_end_of_image(void) {
 #if DEBUG_VERBOSE
         printf("END OF IMAGE\n");
 #endif
+    return 0;
 }
 
-void parse_jfif_app0(FILE* file, jpeg_state_t* state) {
+size_t parse_jfif_app0(FILE* file, jpeg_state_t* state) {
     jpeg_app0_t header;
     read_u16(file, &header.length, JPEG_BYTE_ORDER_BE);
     read_bytes(file, &header.identifier, sizeof(header.identifier));
@@ -421,9 +458,10 @@ void parse_jfif_app0(FILE* file, jpeg_state_t* state) {
     else {
         ERROR("Invalid APP0 identifier");
     }
+    return (size_t)header.length;
 }
 
-void parse_jfif_app1(FILE* file, jpeg_state_t* state) {
+size_t parse_jfif_app1(FILE* file, jpeg_state_t* state) {
     read_u16(file, &state->exif.length, JPEG_BYTE_ORDER_BE);
     read_bytes(file, &state->exif.identifier, sizeof(state->exif.identifier));
     read_u8(file, &state->exif._pad);
@@ -444,9 +482,10 @@ void parse_jfif_app1(FILE* file, jpeg_state_t* state) {
         printf("\t.tiff_identifier = %i\n", state->exif.tiff_identifier);
         printf("\t.ifd_offset      = %i\n", state->exif.ifd_offset);
 #endif
+    return (size_t)state->exif.length;
 }
 
-void parse_start_of_frame(FILE* file, jpeg_state_t* state) {
+size_t parse_start_of_frame(FILE* file, jpeg_state_t* state, uint8_t marker) {
     jpeg_start_of_frame_t* header = &state->start_of_frame;
     read_u16(file, &header->length, JPEG_BYTE_ORDER_BE);
     read_u8(file, &header->bits_per_pixel);
@@ -454,8 +493,38 @@ void parse_start_of_frame(FILE* file, jpeg_state_t* state) {
     read_u16(file, &header->width, JPEG_BYTE_ORDER_BE);
     read_u8(file, &header->n_components);
 
+    const int mode = (marker >> 0) & 0x03;
+    const int differential = (marker >> 2) & 0x01;
+    const int coding = (marker >> 3) & 0x01;
+
+    if (header->n_components == 0) ERROR("scan has no components");
+
+    if (mode == JPEG_SCAN_MODE_BASELINE) {
+        if (header->bits_per_pixel != 8) ERROR("scan has invalid bits per pixel");
+    }
+    else if (mode == JPEG_SCAN_MODE_EXTENDED) {
+        if (header->bits_per_pixel != 8 && header->bits_per_pixel != 12) ERROR("scan has invalid bits per pixel");
+    }
+    else if (mode == JPEG_SCAN_MODE_PROGRESSIVE) {
+        if (header->bits_per_pixel != 8 && header->bits_per_pixel != 12) ERROR("scan has invalid bits per pixel");
+        if (header->n_components > 4) ERROR("progressive scan can not have more than 4 components")
+    }
+    else /* if (mode == JPEG_SCAN_MODE_LOSSLESS) */ {
+        if (header->bits_per_pixel < 2 || header->bits_per_pixel > 16) ERROR("lossless scan bit depth must be >= 2 and <= 16");
+    }
+
 #if DEBUG_VERBOSE
+        const char* names_mode[] = {"base", "extended", "progressive", "lossless"};
+        const char* names_differential[] = {"non-differential", "differential"};
+        const char* names_coding[] = {"huffman", "arithmetic"};
         printf("START OF FRAME:\n");
+        printf("\ttype: %02X (%s mode, %s, %s-coding", marker, 
+            names_mode[mode],
+            names_differential[differential],
+            names_coding[coding]
+        );
+        printf(")\n");
+
         printf("\t.length         = %i\n", header->length);
         printf("\t.bits_per_pixel = %i\n", header->bits_per_pixel);
         printf("\t.height         = %i\n", header->height);
@@ -471,6 +540,19 @@ void parse_start_of_frame(FILE* file, jpeg_state_t* state) {
         read_u8(file, &component.id);
         read_u8(file, &component.blocks_per_mcu.u8);
         read_u8(file, &component.quant_table_id);
+
+        if (component.blocks_per_mcu.width == 0 || component.blocks_per_mcu.width > 4) {
+            ERROR("invalid horizontal blocks per MCU");
+        }
+        if (component.blocks_per_mcu.height == 0 || component.blocks_per_mcu.height > 4) {
+            ERROR("invalid vertical blocks per MCU");
+        }
+        if (mode != JPEG_SCAN_MODE_LOSSLESS && component.quant_table_id > 3) {
+            ERROR("invalid quant table id");
+        }
+        if (mode == JPEG_SCAN_MODE_LOSSLESS && component.quant_table_id != 0) {
+            ERROR("invalid quant table id");
+        }
 
         if (component.blocks_per_mcu.width > smp_factor_max_w) {
             smp_factor_max_w = component.blocks_per_mcu.width;
@@ -497,38 +579,58 @@ void parse_start_of_frame(FILE* file, jpeg_state_t* state) {
 #if DEBUG_VERBOSE
         printf("\t\tMCU size: %ix%i\n", (int)state->mcu_width, (int)state->mcu_height);
 #endif
+    
+    return (size_t)header->length;
 }
 
-void parse_quant_table(FILE* file, jpeg_state_t* state) {
+size_t parse_quant_table(FILE* file, jpeg_state_t* state) {
     jpeg_quant_table_t header;
     read_u16(file, &header.length, JPEG_BYTE_ORDER_BE);
-    read_u8(file, &header.table_id);
 
-    const size_t table_buf_size = header.length - 3;
+    size_t bytes_left = header.length - 2;
 
-    // allocate new quantization table
-    const size_t table_id = state->n_quant_tables++;
-    state->quant_tables = realloc(state->quant_tables, sizeof(*state->quant_tables) * (state->n_quant_tables));
-    state->quant_tables[table_id] = mem_alloc(table_buf_size, state);
+    while (bytes_left) {
+        printf("ftell %i\n", ftell(file));
+        read_u8(file, &header.table_id);
+        const uint8_t table_id = header.table_id & 0x0F;
+        const uint8_t precision = header.table_id >> 4;
+        if (precision > 1) {
+            printf("precision %i\n", header.table_id);
+            ERROR("invalid table precision");
+        }
 
-    read_bytes(file, state->quant_tables[table_id], table_buf_size);
+        const size_t table_buf_size = 64 + (64 * precision);
 
-    state->has_quant = 1;
+        // allocate new quantization table
+        if (state->n_quant_tables <= table_id) {
+            state->n_quant_tables = table_id;
+            state->quant_tables = realloc(state->quant_tables, sizeof(*state->quant_tables) * (state->n_quant_tables));
+        }
+        state->quant_tables[table_id] = mem_alloc(table_buf_size, state);
 
-#if DEBUG_VERBOSE
-        printf("QUANT TABLE:\n");
-        printf("\t.length          = %i\n", header.length);
-        printf("\t.table_id        = %i\n", header.table_id);
-        printf("\ttable values: (%i bytes)\n\t\t", (int)table_buf_size);
-        for (size_t i = 0; i < table_buf_size; ++i) {
-            if (i && i % BLOCK_RES == 0) printf("\n\t\t");
+        read_bytes(file, state->quant_tables[table_id], table_buf_size);
+        bytes_left -= (table_buf_size + 1);
+        
+        #if DEBUG_VERBOSE
+                printf("QUANT TABLE:\n");
+                printf("\t.length          = %i\n", header.length);
+                printf("\t.table_id        = %i\n", table_id);
+                printf("\t.precision       = %i\n", ((precision + 1) * 8));
+                printf("\ttable values: (%i bytes)\n\t\t", (int)table_buf_size);
+                for (size_t i = 0; i < table_buf_size; ++i) {
+                    if (i && i % BLOCK_RES == 0) printf("\n\t\t");
             printf("%3i, ", state->quant_tables[table_id][i]);
         }
         printf("\n");
-#endif
+        #endif
+    }
+
+    state->has_quant = 1;
+
+    return (size_t)header.length;
 }
 
-void parse_huffman_table(FILE* file, jpeg_state_t* state) {
+size_t parse_huffman_table(FILE* file, jpeg_state_t* state) {
     jpeg_huffman_table_header_t header;
     read_u16(file, &header.length, JPEG_BYTE_ORDER_BE);
     read_u8(file, &header.class_id);
@@ -607,9 +709,10 @@ void parse_huffman_table(FILE* file, jpeg_state_t* state) {
             printf("\t(%i)\n", huff_tbl.codes[i]);
         }
 #endif
+    return (size_t)header.length;
 }
 
-void parse_start_of_scan(FILE* file, jpeg_state_t* state) {
+size_t parse_start_of_scan(FILE* file, jpeg_state_t* state) {
     jpeg_start_of_scan_t header;
     read_u16(file, &header.length, JPEG_BYTE_ORDER_BE);
     read_u8(file, &header.n_components);
@@ -621,6 +724,16 @@ void parse_start_of_scan(FILE* file, jpeg_state_t* state) {
     read_u8(file, &header.spectral_selection_min);
     read_u8(file, &header.spectral_selection_max);
     read_u8(file, &header.successive_approximation);
+
+    if (header.n_components == 0 || header.n_components > 4) {
+        ERROR("invalid number of components in scan")
+    }
+    if (header.spectral_selection_min > 63 || header.spectral_selection_max > 63) {
+        ERROR("invalid spectral selection for scan (selection exceeds limit of 64)");
+    }
+    if (header.spectral_selection_min > header.spectral_selection_max) {
+        ERROR("invalid spectral selection for scan (min is greater than max)");
+    }
 
     header.components = components;
     state->start_of_scan = header;
@@ -638,6 +751,7 @@ void parse_start_of_scan(FILE* file, jpeg_state_t* state) {
         printf("\t.spectral_selection_max   = %i\n", header.spectral_selection_max)  ;
         printf("\t.successive_approximation = %i\n", header.successive_approximation);
 #endif
+    return (size_t)header.length;
 }
 
 void bit_stream_init(bit_stream_t* stream) {
@@ -1128,16 +1242,53 @@ void cleanup(jpeg_state_t* state) {
     memset(state, 0, sizeof(jpeg_state_t));
 }
 
+void handle_markers(FILE* in_file, jpeg_state_t* state) {
+    state->scratch_buffer = mem_alloc(BLOCK_RES * BLOCK_RES * sizeof(FLOAT), state);
+    
+    jpeg_marker_t marker;
+
+    while (fread(&marker, sizeof(jpeg_marker_t), 1, in_file)) {
+        if (marker.magic != JPEG_MARKER_PREFIX) break;
+
+        size_t marker_start = ftell(in_file);
+        size_t length = 0;
+
+        switch (marker.type) {
+            case JPEG_MARKER_START_OF_FRAME0:
+            case JPEG_MARKER_START_OF_FRAME2: length = parse_start_of_frame(in_file, state, marker.type); break;
+            case JPEG_MARKER_HUFFMAN_TABLE:   length = parse_huffman_table(in_file, state); break;
+            case JPEG_MARKER_START_OF_IMAGE:  length = parse_start_of_image(); break;
+            case JPEG_MARKER_END_OF_IMAGE:    length = parse_end_of_image(); break;
+            case JPEG_MARKER_START_OF_SCAN:   length = parse_start_of_scan(in_file, state); break;
+            case JPEG_MARKER_QUANT_TABLE:     length = parse_quant_table(in_file, state); break;
+            case JPEG_MARKER_JFIF_APP0:       length = parse_jfif_app0(in_file, state); break;
+            case JPEG_MARKER_JFIF_APP1:       length = parse_jfif_app1(in_file, state); break;
+            default:                          ERROR("Unknown marker"); break;
+        }
+
+        if (error_length > 0) {
+            return;
+        }
+
+        fseek(in_file, marker_start + length, SEEK_SET);
+        
+        continue;
+    }
+}
+
 #if STANDALONE
 int main(int argc, char** argv) {
     // parse arguments
     if (argc != 3) {
         printf("Usage: jpeg_dec <input> <output>\n");
-        return 1;
+        // return 1;
     }
     
-    const char* in_path = argv[1];
-    const char* out_path = argv[2];
+    // const char* in_path = argv[1];
+    // const char* out_path = argv[2];
+    const char* in_path = "../test assets/test11.jpg";
+    const char* out_path = "waow.bmp";
+
 
     // open input file
     FILE* in_file = fopen(in_path, "rb");
@@ -1156,33 +1307,14 @@ int main(int argc, char** argv) {
     fseek(in_file, 0, SEEK_SET);
     printf("%6i / %i\r", (int)_loops, LOOP_COUNT);
 #endif
-    
-    state.scratch_buffer = mem_alloc(BLOCK_RES * BLOCK_RES * sizeof(FLOAT), &state);
-    // handle each section
-    jpeg_marker_t marker;
-    while (fread(&marker, sizeof(jpeg_marker_t), 1, in_file)) {
-        if (marker.magic != JPEG_MARKER_MAGIC) break;
 
-        switch (marker.type) {
-        case JPEG_MARKER_START_OF_FRAME: parse_start_of_frame(in_file, &state); break;
-        case JPEG_MARKER_HUFFMAN_TABLE:  parse_huffman_table(in_file, &state); break;
-        case JPEG_MARKER_START_OF_IMAGE: parse_start_of_image(); break;
-        case JPEG_MARKER_END_OF_IMAGE:   parse_end_of_image(); break;
-        case JPEG_MARKER_START_OF_SCAN:  parse_start_of_scan(in_file, &state); break;
-        case JPEG_MARKER_QUANT_TABLE:    parse_quant_table(in_file, &state); break;
-        case JPEG_MARKER_JFIF_APP0:      parse_jfif_app0(in_file, &state); break;
-        case JPEG_MARKER_JFIF_APP1:      parse_jfif_app1(in_file, &state); break;
-        default:                         ERROR("Unknown marker"); break;
-        }
-
-        if (error_length > 0) {
-            return 3;
-        }
-        
-        continue;
-    }
+    handle_markers(in_file, &state);
 
     parse_image_data(in_file, &state);
+    
+    if (error_length > 0) {
+        return 3;
+    }
 
 #if PROFILING
     cleanup(&state);
@@ -1222,32 +1354,13 @@ string jpeg_pre_render(Pre_Rendering_Info* pre_info) {
 
     fseek(pre_info->fileptr, 0, SEEK_SET);
     generate_luts(state);
-    state->scratch_buffer = mem_alloc(BLOCK_RES * BLOCK_RES * sizeof(FLOAT), state);
+    handle_markers(pre_info->fileptr, state);
 
-    jpeg_marker_t marker;
-    while (fread(&marker, sizeof(jpeg_marker_t), 1, pre_info->fileptr)) {
-        if (marker.magic != JPEG_MARKER_MAGIC) break;
-
-        switch (marker.type) {
-        case JPEG_MARKER_START_OF_FRAME: parse_start_of_frame(pre_info->fileptr, state); break;
-        case JPEG_MARKER_HUFFMAN_TABLE:  parse_huffman_table(pre_info->fileptr, state); break;
-        case JPEG_MARKER_START_OF_IMAGE: parse_start_of_image(); break;
-        case JPEG_MARKER_END_OF_IMAGE:   parse_end_of_image(); break;
-        case JPEG_MARKER_START_OF_SCAN:  parse_start_of_scan(pre_info->fileptr, state); break;
-        case JPEG_MARKER_QUANT_TABLE:    parse_quant_table(pre_info->fileptr, state); break;
-        case JPEG_MARKER_JFIF_APP0:      parse_jfif_app0(pre_info->fileptr, state); break;
-        case JPEG_MARKER_JFIF_APP1:      parse_jfif_app1(pre_info->fileptr, state); break;
-        default:                         ERROR("Unknown marker"); break;
-        }
-
-        if (error_length > 0) {
-            return (string) {
-                .count = error_length,
-                .data = (uint8_t*)&error_buffer[0]
-            };
-        }
-
-        continue;
+    if (error_length > 0) {
+        return (string) {
+            .count = error_length,
+            .data = (uint8_t*)&error_buffer[0]
+        };
     }
 
     pre_info->width = state->start_of_frame.width;
