@@ -1293,7 +1293,7 @@ int main(int argc, char** argv) {
     // open input file
     FILE* in_file = fopen(in_path, "rb");
     if (!in_file) {
-        printf("Error: failed to open file \"%.*s\"", 512, in_path);
+        printf("Error: failed to open file \"%.*s\"\n", 512, in_path);
         return 2;
     }
 
@@ -1335,32 +1335,32 @@ int main(int argc, char** argv) {
 #if MIV_LIBRARY
 #include "MIV.h"
 
-int64_t registration_procedure(Provided_Registration_Entry* registration) {
-    registration->name_filetype = to_string("JPEG Image");
+int64_t registration_procedure(Plugin_Registration_Entry* registration) {
+    registration->name_of_filetype = to_string("JPEG Image");
     registration->procedure_prefix = to_string("jpeg_");
     registration->extension = to_string("JPG");
     registration->magic_number = to_string("\xFF\xD8");
-    registration->has_magic_number = 1;
-    registration->extension_is_case_sensitive = 0;
     registration->has_settings = 0;
     return 0;
 }
 
-string jpeg_pre_render(Pre_Rendering_Info* pre_info) {
+Log jpeg_pre_render(Pre_Rendering_Info* pre_info) {
+    printf("jpeg_pre_render\n");
     if (pre_info->user_ptr == NULL) {
         pre_info->user_ptr = malloc(sizeof(jpeg_state_t));
     }
     jpeg_state_t* state = (jpeg_state_t*)pre_info->user_ptr;
+    memset(state, 0, sizeof(*state));
 
     fseek(pre_info->fileptr, 0, SEEK_SET);
     generate_luts(state);
     handle_markers(pre_info->fileptr, state);
 
     if (error_length > 0) {
-        return (string) {
-            .count = error_length,
-            .data = (uint8_t*)&error_buffer[0]
-        };
+        return (Log){LOG_TYPE_ERROR, {
+            .count = error_length, 
+            .data = (uint8_t*)&error_buffer
+        }};
     }
 
     pre_info->width = state->start_of_frame.width;
@@ -1368,23 +1368,22 @@ string jpeg_pre_render(Pre_Rendering_Info* pre_info) {
     pre_info->bit_depth = 8;
     pre_info->channels = 3;
     pre_info->metadata_count = 0; // todo
-    return (string){0};
+    return (Log){0};
 }
 
-string jpeg_render(Pre_Rendering_Info* pre_info, Rendering_Info* render_info) {
+Log jpeg_render(Pre_Rendering_Info* pre_info, Rendering_Info* render_info) {
+    printf("jpeg_render\n");
     jpeg_state_t* state = (jpeg_state_t*)pre_info->user_ptr;
     fseek(pre_info->fileptr, state->image_data_start, SEEK_SET);
     
     parse_image_data(pre_info->fileptr, state);
+    
     if (error_length > 0) {
-        return (string){
+        return (Log){LOG_TYPE_ERROR, {
             .count = error_length, 
             .data = (uint8_t*)&error_buffer
-        };
+        }};
     }
-
-    if (render_info->buffer_width != (int64_t)state->out_width) return to_string("render_info->buffer_width != state.out_width");
-    if (render_info->buffer_height != (int64_t)state->out_height) return to_string("render_info->buffer_height != state.out_height");
 
     for (int i = 0; i < render_info->buffer_count; ++i) {
         render_info->buffer[i][0] = state->out_image[i].r;
@@ -1393,17 +1392,17 @@ string jpeg_render(Pre_Rendering_Info* pre_info, Rendering_Info* render_info) {
         render_info->buffer[i][3] = 255;
     }
 
-    return (string){0};
+    return (Log){0};
 }
 
-string jpeg_cleanup(Pre_Rendering_Info* pre_info) {
+Log jpeg_cleanup(Pre_Rendering_Info* pre_info) {
     if (pre_info->user_ptr != NULL) {
         cleanup((jpeg_state_t*)pre_info->user_ptr);
         free(pre_info->user_ptr);
         pre_info->user_ptr = NULL;
     }
 
-    return (string){0};
+    return (Log){0};
 }
 
 #endif

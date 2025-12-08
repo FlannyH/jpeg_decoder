@@ -2,77 +2,92 @@
 #include <string.h>
 #include <stdio.h>
 
+/*** Jai string compatibility. ***/
 typedef struct {
 	int64_t count;
 	uint8_t *data;
 } string;
 
-inline string to_string(char *str) {
-	return (string){(int64_t)strlen(str), (uint8_t*)str};
+string to_string(char *str) {
+	return (string){(int64_t) strlen(str), (uint8_t *) str};
 }
 
-/*** The next three structs are used in the mandatory functions. ***/
+/*** The next four structs are used in the mandatory functions. ***/
 
+#define LOG_TYPE_LOG 0
+#define LOG_TYPE_ERROR 1
+#define LOG_TYPE_WARNING 2
 typedef struct {
-	string name_filetype;
-	string procedure_prefix;
+	uint8_t type;
+	string message;
+} Log;
+
+/* Entirely filled in by the Plugin. */
+typedef struct {
+	string name_of_filetype;
 	string extension;
 	string magic_number;
-	uint8_t has_magic_number;
-	uint8_t extension_is_case_sensitive;
+
+	string procedure_prefix;
 	uint8_t has_settings;
-} Provided_Registration_Entry;
+} Plugin_Registration_Entry;
 
 typedef struct {
+	/* <Provided by MIV> */
 	string name;
 	FILE *fileptr;
+	/* <Provided by MIV/> */
+	/* <Provided by Plugin> */
 	int64_t width, height;
-
 	uint8_t bit_depth;
 	uint8_t channels;
 	int64_t metadata_count;
 	string (*metadata)[2];
 
 	void *user_ptr;
+	/* <Provided by Plugin/> */
 } Pre_Rendering_Info;
 
+/* Entirely filled in by MIV, except for the values in the buffer. */
 typedef struct {
-	int64_t buffer_width;
-	int64_t buffer_height;
-
 	int64_t buffer_count;
 	uint8_t (*buffer)[4];
 } Rendering_Info;
 
 /*** From here it is about the optional features (like plugin settings). ***/
-
-typedef struct {
-	uint8_t selected;
-	string name;
-} List_Item;
+#define RESPONSE_NOTHING 0;
+#define RESPONSE_RE_RENDER 1;
 
 #define OPTION_TYPE_TOGGLE 0;
 #define OPTION_TYPE_LIST 1;
+#define OPTION_TYPE_SLIDER 2;
 
 typedef struct {
+	int32_t provided_ID;
+
 	string name;
 	uint8_t type;
-	union {
-		uint8_t toggle;
-		struct {
-			int64_t count;
-			List_Item *data;
-		} list;
-	};
-} Option;
+} Setting_Info;
 
 typedef struct {
-	uint8_t response;
-	int32_t changed_index;
-	int32_t changed_secondary_index;
-	int64_t options_count;
-	Option *options_data;
-} Settings_Info;
+	Setting_Info info;
+	uint8_t active;
+} Setting_Toggle;
 
-#define RESPONSE_NOTHING 0;
-#define RESPONSE_RE_RENDER 1;
+typedef struct {
+	uint8_t active;
+	string name;
+} List_Item;
+
+typedef struct {
+	Setting_Info info;
+	int64_t changed_item;
+	int64_t count;
+	List_Item *data;
+} Setting_List;
+
+typedef struct {
+	Setting_Info info;
+	string value_text;
+	float value;
+} Setting_Slider;
