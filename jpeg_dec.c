@@ -61,6 +61,7 @@ typedef enum {
     JPEG_MARKER_QUANT_TABLE = 0xDB,
     JPEG_MARKER_JFIF_APP0 = 0xE0, // JFIF header
     JPEG_MARKER_JFIF_APP1 = 0xE1, // EXIF header
+    JPEG_MARKER_JFIF_APP2 = 0xE2, // icc color profile
     JPEG_MARKER_PREFIX = 0xFF, // prefix byte preceding every marker
 
     // todo:
@@ -85,8 +86,9 @@ typedef enum {
     JPEG_MARKER_RST5 = 0xD5, // restart marker 5
     JPEG_MARKER_RST6 = 0xD6, // restart marker 6
     JPEG_MARKER_RST7 = 0xD7, // restart marker 7
+    JPEG_MARKER_JFIF_APP4 = 0xE4, // todo: figure this one out
+    JPEG_MARKER_JFIF_APP11 = 0xEB, // todo: figure this one out
     JPEG_MARKER_COMMENT = 0xFE, // print verbose and move on
-    JPEG_MARKER_JFIF_APP2 = 0xE2, // icc color profile
     JPEG_MARKER_RESET_INTERVAL = 0xDD,
     JPEG_MARKER_LINE_COUNT = 0xDC,
 } jpeg_marker_type_t;
@@ -155,7 +157,7 @@ typedef struct {
 
 typedef struct {
     uint16_t length; // excluding markers
-    char identifier[5]; // "Exif" including null terminator
+    char identifier[32]; // "Exif" including null terminator
     uint8_t _pad; // ignore, likely 0
     uint16_t byte_order; // see `jpeg_byte_order_t`
     uint16_t tiff_identifier; // should be 42
@@ -463,26 +465,72 @@ size_t parse_jfif_app0(FILE* file, jpeg_state_t* state) {
 
 size_t parse_jfif_app1(FILE* file, jpeg_state_t* state) {
     read_u16(file, &state->exif.length, JPEG_BYTE_ORDER_BE);
-    read_bytes(file, &state->exif.identifier, sizeof(state->exif.identifier));
-    read_u8(file, &state->exif._pad);
-    read_u16(file, &state->exif.byte_order, JPEG_BYTE_ORDER_BE);
-    read_u16(file, &state->exif.tiff_identifier, JPEG_BYTE_ORDER_BE);
-    read_s32(file, &state->exif.ifd_offset, JPEG_BYTE_ORDER_BE);
 
-    // todo: exif parsing
-    fseek(file, state->exif.length - 16, SEEK_CUR);
+    // read identifier
+    uint8_t curr_byte = 0;
 
-    state->has_exif = 1;
+    size_t id_len_max = sizeof(state->exif.identifier);
 
-#if DEBUG_VERBOSE
-        printf("APP1:\n");
-        printf("\t.length          = %i\n", state->exif.length);
-        printf("\t.identifier      = %.*s\n", 5, (char*)state->exif.identifier);
-        printf("\t.byte_order      = %.*s\n", 2, (char*)&state->exif.byte_order);
-        printf("\t.tiff_identifier = %i\n", state->exif.tiff_identifier);
-        printf("\t.ifd_offset      = %i\n", state->exif.ifd_offset);
-#endif
+    for (size_t i = 0; i < id_len_max - 1; ++i) {
+        read_u8(file, &curr_byte);
+        state->exif.identifier[i] = (char)curr_byte;
+
+        if (curr_byte == 0) break;
+    }
+
+    if (strncmp(state->exif.identifier, "Exif", id_len_max) == 0) {
+        if (state->has_exif) {
+            printf("double Exif marker found! ignoring second and beyond.\n");
+            return (size_t)state->exif.length;
+        }
+        read_u8(file, &state->exif._pad);
+        read_u16(file, &state->exif.byte_order, JPEG_BYTE_ORDER_BE);
+        read_u16(file, &state->exif.tiff_identifier, JPEG_BYTE_ORDER_BE);
+        read_s32(file, &state->exif.ifd_offset, JPEG_BYTE_ORDER_BE);
+
+        // todo: exif parsing
+
+        state->has_exif = 1;
+
+        #if DEBUG_VERBOSE
+            printf("APP1:\n");
+            printf("\t.length          = %i\n", state->exif.length);
+            printf("\t.identifier      = %.*s\n", 5, (char*)state->exif.identifier);
+            printf("\t.byte_order      = %.*s\n", 2, (char*)&state->exif.byte_order);
+            printf("\t.tiff_identifier = %i\n", state->exif.tiff_identifier);
+            printf("\t.ifd_offset      = %i\n", state->exif.ifd_offset);
+        #endif
+    }
+    // todo: APP1 with other identifiers
+
     return (size_t)state->exif.length;
+}
+
+size_t parse_jfif_app2(FILE* file, jpeg_state_t* state) {
+    uint16_t length = 0;
+    read_u16(file, &length, JPEG_BYTE_ORDER_BE);
+
+    // todo: parse the ICC color profile
+
+    return length;
+}
+
+size_t parse_jfif_app4(FILE* file, jpeg_state_t* state) {
+    uint16_t length = 0;
+    read_u16(file, &length, JPEG_BYTE_ORDER_BE);
+
+    // todo: figure out what this binary blob means
+
+    return length;
+}
+
+size_t parse_jfif_app11(FILE* file, jpeg_state_t* state) {
+    uint16_t length = 0;
+    read_u16(file, &length, JPEG_BYTE_ORDER_BE);
+
+    // todo: figure out what this binary blob means
+
+    return length;
 }
 
 size_t parse_start_of_frame(FILE* file, jpeg_state_t* state, uint8_t marker) {
@@ -1263,6 +1311,9 @@ void handle_markers(FILE* in_file, jpeg_state_t* state) {
             case JPEG_MARKER_QUANT_TABLE:     length = parse_quant_table(in_file, state); break;
             case JPEG_MARKER_JFIF_APP0:       length = parse_jfif_app0(in_file, state); break;
             case JPEG_MARKER_JFIF_APP1:       length = parse_jfif_app1(in_file, state); break;
+            case JPEG_MARKER_JFIF_APP2:       length = parse_jfif_app2(in_file, state); break;
+            case JPEG_MARKER_JFIF_APP4:       length = parse_jfif_app4(in_file, state); break;
+            case JPEG_MARKER_JFIF_APP11:      length = parse_jfif_app11(in_file, state); break;
             default:                          ERROR("Unknown marker"); break;
         }
 
