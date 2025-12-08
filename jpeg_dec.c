@@ -667,9 +667,9 @@ size_t parse_quant_table(FILE* file, jpeg_state_t* state) {
                 printf("\ttable values: (%i bytes)\n\t\t", (int)table_buf_size);
                 for (size_t i = 0; i < table_buf_size; ++i) {
                     if (i && i % BLOCK_RES == 0) printf("\n\t\t");
-            printf("%3i, ", state->quant_tables[table_id][i]);
-        }
-        printf("\n");
+                    printf("%3i, ", state->quant_tables[table_id][i]);
+                }
+                printf("\n");
         #endif
     }
 
@@ -1119,7 +1119,6 @@ void write_bmp(const char* path, const rgb8_t* img, int w, int h) {
 
 void parse_image_data(FILE* file, jpeg_state_t* state) {
     if (!state->has_chn) ERROR("no channel info found!");
-    if (!state->has_jfif) ERROR("no JFIF header found!");
     if (!state->has_quant) ERROR("no quantization tables found!");
     if (!state->has_huff_tbl) ERROR("no huffman tables found!");
     if (!state->has_sof) ERROR("no start of frame segment found!");
@@ -1151,7 +1150,7 @@ void parse_image_data(FILE* file, jpeg_state_t* state) {
     for (size_t mcu_y = 0; mcu_y < n_mcu_y; ++mcu_y) {
         for (size_t mcu_x = 0; mcu_x < n_mcu_x; ++mcu_x) {
 #if DEBUG_VERBOSE
-            printf("mcu (%i, %i)\n", mcu_x, mcu_y);
+            printf("mcu (%i, %i)\n", (int)mcu_x, (int)mcu_y);
 #endif
 
             // Decode block -> mcu_scratch
