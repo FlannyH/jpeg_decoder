@@ -679,84 +679,95 @@ size_t parse_quant_table(FILE* file, jpeg_state_t* state) {
 }
 
 size_t parse_huffman_table(FILE* file, jpeg_state_t* state) {
+    const size_t header_start = ftell(file);
+
     jpeg_huffman_table_header_t header;
     read_u16(file, &header.length, JPEG_BYTE_ORDER_BE);
-    read_u8(file, &header.class_id);
-    read_bytes(file, &header.bit_lengths[0], sizeof(header.bit_lengths));
 
-    jpeg_huffman_table_decoded_t huff_tbl;
-    huff_tbl.table_buf_size = header.length - 19;
-    huff_tbl.symbols = mem_alloc(huff_tbl.table_buf_size, state);
-    huff_tbl.codes = mem_alloc(huff_tbl.table_buf_size * sizeof(uint32_t), state);
-    huff_tbl.code_lengths = mem_alloc(huff_tbl.table_buf_size, state);
-    
-    memset(huff_tbl.symbols, 0, huff_tbl.table_buf_size);
-    memset(huff_tbl.codes, 0, huff_tbl.table_buf_size * sizeof(uint32_t));
-    memset(huff_tbl.code_lengths, 0, huff_tbl.table_buf_size);
-    read_bytes(file, huff_tbl.symbols, huff_tbl.table_buf_size);
+    const size_t header_end = header_start + header.length;
 
-    const size_t lut_size = (1 << 16) * sizeof(jpeg_huffman_lut_entry_t);
-    huff_tbl.left_shifted_code_lut = mem_alloc(lut_size, state);
-    memset(huff_tbl.left_shifted_code_lut, 0, lut_size);
+    while (ftell(file) < header_end) {
+        read_u8(file, &header.class_id);
+        read_bytes(file, &header.bit_lengths[0], sizeof(header.bit_lengths));
 
-    // decode table
-    size_t length = 1;
-    size_t code = 0;
-    size_t symbol_id = 0;
-
-    for (size_t i_bit_lengths = 0; i_bit_lengths < sizeof(header.bit_lengths); ++i_bit_lengths) {
-        for (size_t i = 0; i < header.bit_lengths[i_bit_lengths]; ++i) {
-            const size_t code_start = (code++) << (15 - i_bit_lengths);
-            const size_t code_end = ((code) << (15 - i_bit_lengths));
-            
-            huff_tbl.code_lengths[symbol_id] = length;
-            huff_tbl.codes[symbol_id] = code_start;
-            
-            for (size_t i_lut = code_start; i_lut < code_end; ++i_lut) {
-                huff_tbl.left_shifted_code_lut[i_lut].length = i_bit_lengths + 1;
-                huff_tbl.left_shifted_code_lut[i_lut].symbol = huff_tbl.symbols[symbol_id];
-            }
-            ++symbol_id;
+        jpeg_huffman_table_decoded_t huff_tbl;
+        huff_tbl.table_buf_size = 0;
+        for (size_t i = 0; i < sizeof(header.bit_lengths); ++i) {
+            huff_tbl.table_buf_size += header.bit_lengths[i];
         }
-        code <<= 1;
-        ++length;
-    }
-    
-    if (header.class == 0) { // DC
-        ++state->n_huffman_tables_dc;
-        state->huffman_tables_dc = realloc(state->huffman_tables_dc, state->n_huffman_tables_dc * sizeof(jpeg_huffman_table_decoded_t));
-        state->huffman_tables_dc[state->n_huffman_tables_dc - 1] = huff_tbl;
-    }
-    else if (header.class == 1) { // AC
-        ++state->n_huffman_tables_ac;
-        state->huffman_tables_ac = realloc(state->huffman_tables_ac, state->n_huffman_tables_ac * sizeof(jpeg_huffman_table_decoded_t));
-        state->huffman_tables_ac[state->n_huffman_tables_ac - 1] = huff_tbl;
-    }
-    else {
-        ERROR("Invalid huffman table class");
+
+        huff_tbl.symbols = mem_alloc(huff_tbl.table_buf_size, state);
+        huff_tbl.codes = mem_alloc(huff_tbl.table_buf_size * sizeof(uint32_t), state);
+        huff_tbl.code_lengths = mem_alloc(huff_tbl.table_buf_size, state);
+        
+        memset(huff_tbl.symbols, 0, huff_tbl.table_buf_size);
+        memset(huff_tbl.codes, 0, huff_tbl.table_buf_size * sizeof(uint32_t));
+        memset(huff_tbl.code_lengths, 0, huff_tbl.table_buf_size);
+        read_bytes(file, huff_tbl.symbols, huff_tbl.table_buf_size);
+
+        const size_t lut_size = (1 << 16) * sizeof(jpeg_huffman_lut_entry_t);
+        huff_tbl.left_shifted_code_lut = mem_alloc(lut_size, state);
+        memset(huff_tbl.left_shifted_code_lut, 0, lut_size);
+
+        // decode table
+        size_t length = 1;
+        size_t code = 0;
+        size_t symbol_id = 0;
+
+        for (size_t i_bit_lengths = 0; i_bit_lengths < sizeof(header.bit_lengths); ++i_bit_lengths) {
+            for (size_t i = 0; i < header.bit_lengths[i_bit_lengths]; ++i) {
+                const size_t code_start = (code++) << (15 - i_bit_lengths);
+                const size_t code_end = ((code) << (15 - i_bit_lengths));
+                
+                huff_tbl.code_lengths[symbol_id] = length;
+                huff_tbl.codes[symbol_id] = code_start;
+                
+                for (size_t i_lut = code_start; i_lut < code_end; ++i_lut) {
+                    huff_tbl.left_shifted_code_lut[i_lut].length = i_bit_lengths + 1;
+                    huff_tbl.left_shifted_code_lut[i_lut].symbol = huff_tbl.symbols[symbol_id];
+                }
+                ++symbol_id;
+            }
+            code <<= 1;
+            ++length;
+        }
+        
+        if (header.class == 0) { // DC
+            ++state->n_huffman_tables_dc;
+            state->huffman_tables_dc = realloc(state->huffman_tables_dc, state->n_huffman_tables_dc * sizeof(jpeg_huffman_table_decoded_t));
+            state->huffman_tables_dc[state->n_huffman_tables_dc - 1] = huff_tbl;
+        }
+        else if (header.class == 1) { // AC
+            ++state->n_huffman_tables_ac;
+            state->huffman_tables_ac = realloc(state->huffman_tables_ac, state->n_huffman_tables_ac * sizeof(jpeg_huffman_table_decoded_t));
+            state->huffman_tables_ac[state->n_huffman_tables_ac - 1] = huff_tbl;
+        }
+        else {
+            ERROR("Invalid huffman table class");
+        }
+
+        #if DEBUG_VERBOSE
+            printf("HUFFMAN TABLE:\n");
+            printf("\t.length = %i\n", header.length);
+            printf("\t.class  = %i\n", header.class);
+            printf("\t.id     = %i\n", header.id);
+            printf("\tlengths:\n");
+            for (size_t i = 0; i < sizeof(header.bit_lengths); ++i) {
+                printf("\t\t%2i - %2X", (int)i, header.bit_lengths[i]);
+                printf("\n");
+            }
+            printf("\tvalues:\n");
+            for (size_t i = 0; i < huff_tbl.table_buf_size; ++i) {
+                printf("\t\t%02X - ", huff_tbl.symbols[i]);
+                for (int j = 15; j >= 0; --j) {
+                    printf("%i", (huff_tbl.codes[i] >> j) & 1);
+                }
+                printf("\t(%i)\n", huff_tbl.codes[i]);
+            }
+        #endif
     }
 
     state->has_huff_tbl = 1;
-
-#if DEBUG_VERBOSE
-        printf("HUFFMAN TABLE:\n");
-        printf("\t.length = %i\n", header.length);
-        printf("\t.class  = %i\n", header.class);
-        printf("\t.id     = %i\n", header.id);
-        printf("\tlengths:\n");
-        for (size_t i = 0; i < sizeof(header.bit_lengths); ++i) {
-            printf("\t\t%2i - %2X", (int)i, header.bit_lengths[i]);
-            printf("\n");
-        }
-        printf("\tvalues:\n");
-        for (size_t i = 0; i < huff_tbl.table_buf_size; ++i) {
-            printf("\t\t%02X - ", huff_tbl.symbols[i]);
-            for (int j = 15; j >= 0; --j) {
-                printf("%i", (huff_tbl.codes[i] >> j) & 1);
-            }
-            printf("\t(%i)\n", huff_tbl.codes[i]);
-        }
-#endif
     return (size_t)header.length;
 }
 
