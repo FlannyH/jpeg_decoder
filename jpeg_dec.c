@@ -60,6 +60,7 @@ typedef enum {
     JPEG_MARKER_END_OF_IMAGE = 0xD9, 
     JPEG_MARKER_START_OF_SCAN = 0xDA, // start of compressed image data
     JPEG_MARKER_QUANT_TABLE = 0xDB,
+    JPEG_MARKER_RESTART_INTERVAL = 0xDD, // how many macroblocks before restart
     JPEG_MARKER_JFIF_APP0 = 0xE0, // JFIF header
     JPEG_MARKER_JFIF_APP1 = 0xE1, // EXIF header
     JPEG_MARKER_JFIF_APP2 = 0xE2, // icc color profile
@@ -100,7 +101,6 @@ typedef enum {
     JPEG_MARKER_JFIF_APP14 = 0xEE,
     JPEG_MARKER_JFIF_APP15 = 0xEF,
     JPEG_MARKER_COMMENT = 0xFE, // print verbose and move on
-    JPEG_MARKER_RESET_INTERVAL = 0xDD,
     JPEG_MARKER_LINE_COUNT = 0xDC,
 } jpeg_marker_type_t;
 
@@ -671,6 +671,16 @@ size_t parse_quant_table(FILE* file, jpeg_state_t* state) {
 
     return (size_t)header.length;
 }
+
+size_t parse_restart_interval(FILE* file, jpeg_state_t* state) {
+    uint16_t length = 0;
+    uint16_t interval = 0;
+    read_u16(file, &length, JPEG_BYTE_ORDER_BE);
+    read_u16(file, &interval, JPEG_BYTE_ORDER_BE);
+    if (interval != 0) ERROR("restart markers not yet implemented");
+    return (size_t)length;
+}
+
 
 size_t parse_huffman_table(FILE* file, jpeg_state_t* state) {
     const size_t header_start = ftell(file);
@@ -1318,28 +1328,29 @@ void handle_markers(FILE* in_file, jpeg_state_t* state) {
         switch (marker.type) {
             case JPEG_MARKER_START_OF_FRAME0:
             case JPEG_MARKER_START_OF_FRAME1:
-            case JPEG_MARKER_START_OF_FRAME2: length = parse_start_of_frame(in_file, state, marker.type); break;
-            case JPEG_MARKER_HUFFMAN_TABLE:   length = parse_huffman_table(in_file, state); break;
-            case JPEG_MARKER_START_OF_IMAGE:  length = parse_start_of_image(); break;
-            case JPEG_MARKER_END_OF_IMAGE:    length = parse_end_of_image(); break;
-            case JPEG_MARKER_START_OF_SCAN:   length = parse_start_of_scan(in_file, state); break;
-            case JPEG_MARKER_QUANT_TABLE:     length = parse_quant_table(in_file, state); break;
-            case JPEG_MARKER_JFIF_APP0:       length = parse_jfif_app0(in_file, state); break;
-            case JPEG_MARKER_JFIF_APP1:       length = parse_jfif_app1(in_file, state); break;
-            case JPEG_MARKER_JFIF_APP2:      length = parse_jfif_app_todo(in_file); break;
-            case JPEG_MARKER_JFIF_APP3:      length = parse_jfif_app_todo(in_file); break;
-            case JPEG_MARKER_JFIF_APP4:      length = parse_jfif_app_todo(in_file); break;
-            case JPEG_MARKER_JFIF_APP5:      length = parse_jfif_app_todo(in_file); break;
-            case JPEG_MARKER_JFIF_APP6:      length = parse_jfif_app_todo(in_file); break;
-            case JPEG_MARKER_JFIF_APP7:      length = parse_jfif_app_todo(in_file); break;
-            case JPEG_MARKER_JFIF_APP8:      length = parse_jfif_app_todo(in_file); break;
-            case JPEG_MARKER_JFIF_APP9:      length = parse_jfif_app_todo(in_file); break;
-            case JPEG_MARKER_JFIF_APP10:      length = parse_jfif_app_todo(in_file); break;
-            case JPEG_MARKER_JFIF_APP11:      length = parse_jfif_app_todo(in_file); break;
-            case JPEG_MARKER_JFIF_APP12:      length = parse_jfif_app_todo(in_file); break;
-            case JPEG_MARKER_JFIF_APP13:      length = parse_jfif_app_todo(in_file); break;
-            case JPEG_MARKER_JFIF_APP14:      length = parse_jfif_app_todo(in_file); break;
-            case JPEG_MARKER_JFIF_APP15:      length = parse_jfif_app_todo(in_file); break;
+            case JPEG_MARKER_START_OF_FRAME2:  length = parse_start_of_frame(in_file, state, marker.type); break;
+            case JPEG_MARKER_HUFFMAN_TABLE:    length = parse_huffman_table(in_file, state); break;
+            case JPEG_MARKER_START_OF_IMAGE:   length = parse_start_of_image(); break;
+            case JPEG_MARKER_END_OF_IMAGE:     length = parse_end_of_image(); break;
+            case JPEG_MARKER_START_OF_SCAN:    length = parse_start_of_scan(in_file, state); break;
+            case JPEG_MARKER_QUANT_TABLE:      length = parse_quant_table(in_file, state); break;
+            case JPEG_MARKER_RESTART_INTERVAL: length = parse_restart_interval(in_file, state); break;
+            case JPEG_MARKER_JFIF_APP0:        length = parse_jfif_app0(in_file, state); break;
+            case JPEG_MARKER_JFIF_APP1:        length = parse_jfif_app1(in_file, state); break;
+            case JPEG_MARKER_JFIF_APP2:        length = parse_jfif_app_todo(in_file); break;
+            case JPEG_MARKER_JFIF_APP3:        length = parse_jfif_app_todo(in_file); break;
+            case JPEG_MARKER_JFIF_APP4:        length = parse_jfif_app_todo(in_file); break;
+            case JPEG_MARKER_JFIF_APP5:        length = parse_jfif_app_todo(in_file); break;
+            case JPEG_MARKER_JFIF_APP6:        length = parse_jfif_app_todo(in_file); break;
+            case JPEG_MARKER_JFIF_APP7:        length = parse_jfif_app_todo(in_file); break;
+            case JPEG_MARKER_JFIF_APP8:        length = parse_jfif_app_todo(in_file); break;
+            case JPEG_MARKER_JFIF_APP9:        length = parse_jfif_app_todo(in_file); break;
+            case JPEG_MARKER_JFIF_APP10:       length = parse_jfif_app_todo(in_file); break;
+            case JPEG_MARKER_JFIF_APP11:       length = parse_jfif_app_todo(in_file); break;
+            case JPEG_MARKER_JFIF_APP12:       length = parse_jfif_app_todo(in_file); break;
+            case JPEG_MARKER_JFIF_APP13:       length = parse_jfif_app_todo(in_file); break;
+            case JPEG_MARKER_JFIF_APP14:       length = parse_jfif_app_todo(in_file); break;
+            case JPEG_MARKER_JFIF_APP15:       length = parse_jfif_app_todo(in_file); break;
             default:                          ERROR("Unknown marker"); break;
         }
 
@@ -1358,14 +1369,11 @@ int main(int argc, char** argv) {
     // parse arguments
     if (argc != 3) {
         printf("Usage: jpeg_dec <input> <output>\n");
-        // return 1;
+        return 1;
     }
     
-    // const char* in_path = argv[1];
-    // const char* out_path = argv[2];
-    const char* in_path = "../test assets/test11.jpg";
-    const char* out_path = "waow.bmp";
-
+    const char* in_path = argv[1];
+    const char* out_path = argv[2];
 
     // open input file
     FILE* in_file = fopen(in_path, "rb");
