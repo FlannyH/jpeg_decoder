@@ -17,7 +17,7 @@
 #define DEBUG 0
 #define DEBUG_ERROR 0
 #define DEBUG_VERBOSE 0
-#define DEBUG_MEMORY 1
+#define DEBUG_MEMORY 0
 #define PROFILING 0
 #define FLOAT float
 #define pi 3.141592653589793
@@ -491,7 +491,9 @@ size_t parse_jfif_app1(FILE* file, jpeg_state_t* state) {
 
     if (strncmp(state->exif.identifier, "Exif", id_len_max) == 0) {
         if (state->has_exif) {
-            printf("double Exif marker found! ignoring second and beyond.\n");
+            #if DEBUG
+                printf("double Exif marker found! ignoring second and beyond.\n");
+            #endif
             return (size_t)state->exif.length;
         }
         read_u8(file, &state->exif._pad);
@@ -634,7 +636,9 @@ size_t parse_quant_table(FILE* file, jpeg_state_t* state) {
         const uint8_t table_id = header.table_id & 0x0F;
         const uint8_t precision = header.table_id >> 4;
         if (precision > 1) {
-            printf("precision %i\n", header.table_id);
+            #if DEBUG
+                printf("precision %i\n", header.table_id);
+            #endif
             ERROR("invalid table precision");
         }
         if (precision == 1) { // todo
@@ -673,6 +677,7 @@ size_t parse_quant_table(FILE* file, jpeg_state_t* state) {
 }
 
 size_t parse_restart_interval(FILE* file, jpeg_state_t* state) {
+    (void)state;
     uint16_t length = 0;
     uint16_t interval = 0;
     read_u16(file, &length, JPEG_BYTE_ORDER_BE);
@@ -1433,7 +1438,10 @@ Log jpeg_cleanup(Pre_Rendering_Info* pre_info) {
 }
 
 Log jpeg_pre_render(Pre_Rendering_Info* pre_info) {
+    #if DEBUG
     printf("pre_render\n");
+    #endif
+
     jpeg_cleanup(pre_info);
 
     if (pre_info->user_ptr == NULL) {
