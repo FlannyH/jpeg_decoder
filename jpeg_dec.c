@@ -64,6 +64,7 @@ typedef enum {
     JPEG_MARKER_JFIF_APP0 = 0xE0, // JFIF header
     JPEG_MARKER_JFIF_APP1 = 0xE1, // EXIF header
     JPEG_MARKER_JFIF_APP2 = 0xE2, // icc color profile
+    JPEG_MARKER_COMMENT = 0xFE,
     JPEG_MARKER_PREFIX = 0xFF, // prefix byte preceding every marker
 
     // todo:
@@ -100,7 +101,6 @@ typedef enum {
     JPEG_MARKER_JFIF_APP13 = 0xED,
     JPEG_MARKER_JFIF_APP14 = 0xEE,
     JPEG_MARKER_JFIF_APP15 = 0xEF,
-    JPEG_MARKER_COMMENT = 0xFE, // print verbose and move on
     JPEG_MARKER_LINE_COUNT = 0xDC,
 } jpeg_marker_type_t;
 
@@ -517,6 +517,13 @@ size_t parse_jfif_app1(FILE* file, jpeg_state_t* state) {
     // todo: APP1 with other identifiers
 
     return (size_t)state->exif.length;
+}
+
+size_t parse_comment(FILE* file) {
+    uint16_t length = 0;
+    read_u16(file, &length, JPEG_BYTE_ORDER_BE);
+    // todo: read comment
+    return length;
 }
 
 size_t parse_jfif_app_todo(FILE* file) {
@@ -1277,7 +1284,7 @@ void parse_image_data(FILE* file, jpeg_state_t* state) {
 
                 // store to output
                 const size_t out_index = (y * out_w) + x;
-                out_image[out_index] = (rgb8_t){ // <--- how is this a complicated access pattern
+                out_image[out_index] = (rgb8_t){
                     .r = value,
                     .g = value,
                     .b = value,
@@ -1356,6 +1363,7 @@ void handle_markers(FILE* in_file, jpeg_state_t* state) {
             case JPEG_MARKER_JFIF_APP13:       length = parse_jfif_app_todo(in_file); break;
             case JPEG_MARKER_JFIF_APP14:       length = parse_jfif_app_todo(in_file); break;
             case JPEG_MARKER_JFIF_APP15:       length = parse_jfif_app_todo(in_file); break;
+            case JPEG_MARKER_COMMENT:          length = parse_comment(in_file); break;
             default:                          ERROR("Unknown marker"); break;
         }
 
@@ -1396,17 +1404,13 @@ int main(int argc, char** argv) {
         return 3;
     }
 
-#if PROFILING
-    cleanup(&state);
-    }
-    (void)out_path;
-#else
     write_bmp(out_path, state.out_image, state.out_width, state.out_height);
-#if DEBUG_VERBOSE
+
+#if DEBUG
     printf("wrote bmp to %s\n", out_path);
 #endif
+
     cleanup(&state);
-#endif
 
     return 0;
 }
@@ -1472,6 +1476,7 @@ Log jpeg_pre_render(Pre_Rendering_Info* pre_info) {
 
 Log jpeg_render(Pre_Rendering_Info* pre_info, Rendering_Info* render_info) {
     jpeg_pre_render(pre_info);
+    
     jpeg_state_t* state = (jpeg_state_t*)pre_info->user_ptr;
     fseek(pre_info->fileptr, state->image_data_start, SEEK_SET);
     
