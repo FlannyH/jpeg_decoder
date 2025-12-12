@@ -7,3 +7,5 @@ jpeg_dec.s
 test.bmp
 
 obj/
+/result
+/test
