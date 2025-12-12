@@ -880,7 +880,6 @@ int32_t bit_stream_get_next_bits(FILE* file, bit_stream_t* stream, size_t n_bits
         stream->peek_buffer |= ((uint64_t)next_byte) << (56 - stream->peek_buffer_cursor);
         stream->peek_buffer_cursor += 8;
     }
-}
 
     // get the upper n_bits, and shift them out afterwards
     const int32_t value = stream->peek_buffer >> (64 - n_bits);
@@ -1085,6 +1084,7 @@ void decode_block(FILE* file, bit_stream_t* stream, jpeg_state_t* state, jpeg_co
         while (block_cursor < end) {
             block[block_cursor++] = 0;
         }
+        if (block_cursor == res2) break;
 
         // read bitstring and convert to signed integer
         const uint32_t raw_bits = bit_stream_get_next_bits(file, stream, size, 1);
