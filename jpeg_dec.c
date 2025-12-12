@@ -285,6 +285,8 @@ typedef struct {
     uint8_t has_quant;
     uint8_t has_huff_tbl;
     uint8_t has_luts;
+    
+    uint16_t restart_interval;
 
     jpeg_app0_jfif_t jfif;
     jpeg_app0_jfxx_t jfxx;
@@ -333,16 +335,6 @@ void mem_free_all(jpeg_state_t* state) {
     }
     state->alloc_cursor = 0;
 }
-
-typedef struct {
-    uint8_t scan_buffer[65536];
-    size_t scan_buffer_cursor;
-    size_t end_at_index;
-    size_t n_bits_ready;
-    size_t curr_byte_bits_left;
-    uint64_t bit_peek_buffer;
-    uint8_t curr_byte;
-} bit_stream_t;
 
 void read_s32(FILE* file, int32_t* dest, jpeg_byte_order_t byte_order) {
     if (byte_order == JPEG_BYTE_ORDER_LE) {
@@ -541,8 +533,11 @@ size_t parse_start_of_frame(FILE* file, jpeg_state_t* state, uint8_t marker) {
     read_u8(file, &header->n_components);
 
     const int mode = (marker >> 0) & 0x03;
-    // todo: const int coding = (marker >> 3) & 0x01;
-    // todo: const int differential = (marker >> 2) & 0x01;
+    const int coding = (marker >> 3) & 0x01;
+    const int differential = (marker >> 2) & 0x01;
+
+    if (coding != 0) ERROR("arithmetic-coded jpeg files not supported");
+    if (differential != 0) ERROR("differential jpeg files not supported");
 
     if (header->n_components == 0) ERROR("scan has no components");
 
@@ -656,7 +651,7 @@ size_t parse_quant_table(FILE* file, jpeg_state_t* state) {
 
         // allocate new quantization table
         if (state->n_quant_tables <= table_id) {
-            state->n_quant_tables = table_id;
+            state->n_quant_tables = table_id + 1;
             state->quant_tables = realloc(state->quant_tables, sizeof(*state->quant_tables) * (state->n_quant_tables));
         }
         state->quant_tables[table_id] = mem_alloc(table_buf_size, state);
@@ -686,10 +681,8 @@ size_t parse_quant_table(FILE* file, jpeg_state_t* state) {
 size_t parse_restart_interval(FILE* file, jpeg_state_t* state) {
     (void)state;
     uint16_t length = 0;
-    uint16_t interval = 0;
     read_u16(file, &length, JPEG_BYTE_ORDER_BE);
-    read_u16(file, &interval, JPEG_BYTE_ORDER_BE);
-    if (interval != 0) ERROR("restart markers not yet implemented");
+    read_u16(file, &state->restart_interval, JPEG_BYTE_ORDER_BE);
     return (size_t)length;
 }
 
@@ -829,87 +822,85 @@ size_t parse_start_of_scan(FILE* file, jpeg_state_t* state) {
     return (size_t)header.length;
 }
 
-void bit_stream_init(bit_stream_t* stream) {
-    memset(stream, 0, sizeof(*stream));
-
-    // scan buffer cursor will never reach this index --> keep streaming data
-    stream->end_at_index = sizeof(stream->scan_buffer);
+void print_binary(uint64_t number, int32_t start_msb, int32_t n_bits) {
+    for (int i = start_msb; i >= (start_msb - n_bits); --i) {
+        if ((number >> i) & 1) {
+            printf("1");
+        } else {
+            printf("0");
+        }
+    }
+    printf("\n");
 }
 
-void bit_stream_get_byte(FILE* file, bit_stream_t* stream) {
-    int prev_was_marker = 0;
-    while (1) {
-        // if the buffer cursor looped around, load a new chunk of data into the buffer
-        if (stream->scan_buffer_cursor == 0) {
-            size_t read_bytes = fread(&stream->scan_buffer[stream->scan_buffer_cursor], 1, sizeof(stream->scan_buffer), file);
+typedef struct {
+    uint64_t peek_buffer; // upper 16 bits will contain a key into the huffman table luts
+    size_t peek_buffer_cursor; // so we can start writing to the peek buffer's most significant bits first, and then keep track as we shift them out
+    uint8_t hold; // makes the file stream stop until restarted externally
+} bit_stream_t;
 
-            if (read_bytes != sizeof(stream->scan_buffer)) {
-                stream->end_at_index = read_bytes; // end of scan in sight!
+void bit_stream_init(bit_stream_t* stream) {
+    memset(stream, 0, sizeof(*stream));
+}
+
+int32_t bit_stream_get_next_bits(FILE* file, bit_stream_t* stream, size_t n_bits, int do_advance) {
+    // should never happen, but let's be careful just in case
+    if (n_bits == 0) return 0;
+    if (n_bits >= 32) return 0; 
+
+    // refill buffer
+    while (stream->peek_buffer_cursor < 56) {
+        // todo: cache file data
+        uint8_t next_byte = 0;
+        fread(&next_byte, 1, 1, file);
+
+        // handle markers
+        if (next_byte == 0xFF) {
+            fread(&next_byte, 1, 1, file);
+
+            // 0xFF is the marker prefix, so for actual byte 0xFF in the 
+            // bitstream, there has to be a 0x00 after, which we should ignore
+            if (next_byte == 0x00) {
+                next_byte = 0xFF;
+            }
+            else if (next_byte == JPEG_MARKER_END_OF_IMAGE) {
+                stream->hold = 1;
+            }
+            // detect restart markers
+            else if (next_byte >= JPEG_MARKER_RST0 && next_byte <= JPEG_MARKER_RST7) {
+                stream->hold = 1;
+            }
+            else {
+                ERROR("Unknown marker");
+                return 0;
             }
         }
 
-        if (stream->scan_buffer_cursor >= stream->end_at_index) return; // end of file
-
-        stream->curr_byte = stream->scan_buffer[stream->scan_buffer_cursor];
-        stream->scan_buffer_cursor = (stream->scan_buffer_cursor + 1) % sizeof(stream->scan_buffer);
-        
-        // handle markers
-        if (prev_was_marker) { 
-            if (stream->curr_byte == JPEG_MARKER_END_OF_IMAGE) return;
-            if (stream->curr_byte != 0x00) ERROR("Unexpected marker");
-            stream->curr_byte = 0xFF;
-        }
-        else if (stream->curr_byte == 0xFF) {
-            prev_was_marker = 1;
-            continue;
-        }
-
-        stream->curr_byte_bits_left = 8;
-        break;
+        // shift into peek buffer
+        stream->peek_buffer |= ((uint64_t)next_byte) << (56 - stream->peek_buffer_cursor);
+        stream->peek_buffer_cursor += 8;
     }
 }
 
-// todo: optimize this
-void bit_stream_refill(FILE* file, bit_stream_t* stream) {
-    while (stream->n_bits_ready < 64) {
-        if (stream->curr_byte_bits_left == 0) {
-            bit_stream_get_byte(file, stream);
-        }
+    // get the upper n_bits, and shift them out afterwards
+    const int32_t value = stream->peek_buffer >> (64 - n_bits);
 
-        const uint64_t bit = stream->curr_byte >> 7;
-        stream->curr_byte <<= 1;
-        --stream->curr_byte_bits_left;
-
-        stream->bit_peek_buffer <<= 1;
-        stream->bit_peek_buffer |= bit;
-        ++stream->n_bits_ready;
+    if (do_advance) {
+        stream->peek_buffer <<= n_bits;
+        stream->peek_buffer_cursor -= n_bits;
     }
-}
-
-void bit_stream_advance(FILE* file, bit_stream_t* stream, size_t n_bits) {
-    stream->n_bits_ready -= n_bits;
-    bit_stream_refill(file, stream);
-}
-
-int32_t bit_stream_read_value(FILE* file, bit_stream_t* stream, size_t n_bits) {
-    if (n_bits > 16) ERROR("reading too many (>16) bits from bitstream");
-    if (n_bits == 0) return 0;
-
-    bit_stream_refill(file, stream);
-    const size_t bit_index = 63;
-    int32_t value = 0;
-    int high_bit = 1;
-    for (size_t i = 0; i < n_bits; ++i) {
-        int bit = (stream->bit_peek_buffer >> (bit_index - i)) & 1;
-        value <<= 1;
-        value |= bit;
-        if (i == 0) high_bit = bit;
-    }
-    if (high_bit == 0) {
-        value -= (1 << n_bits) - 1;
-    }
-    bit_stream_advance(file, stream, n_bits);
     return value;
+}
+
+void bit_stream_align_to_next_byte(FILE* file, bit_stream_t* stream) {
+    // check our current byte alignment
+    const size_t peek_mod_8 = stream->peek_buffer_cursor % 8;
+    
+    // return early if stream is already aligned to a byte
+    if (peek_mod_8 == 0) return; 
+
+    // skip the bytes beyond the cursor (for example, peek_mod_8=5, we will advance 3 to get to 8)
+    bit_stream_get_next_bits(file, stream, 8 - peek_mod_8, 1);
 }
 
 void entropy_decode(FLOAT *restrict block, jpeg_state_t* state) {
@@ -1029,6 +1020,14 @@ void add_div(FLOAT* arr, FLOAT to_add, FLOAT to_div, size_t count) {
     } 
 }
 
+int32_t parse_raw_value(int32_t value, int32_t n_bits) {
+    int32_t msb = (1 << (n_bits-1));
+    if ((value & msb) == 0) {
+        value = value - (1 << n_bits) + 1;
+    }
+    return value;
+}
+
 void decode_block(FILE* file, bit_stream_t* stream, jpeg_state_t* state, jpeg_component_t component_huff, uint8_t *restrict quant, FLOAT *restrict block, size_t resolution, FLOAT *restrict dc_prev) {
     // decode huffman
     jpeg_huffman_table_decoded_t huff_tbl_dc = state->huffman_tables_dc[(size_t)component_huff.tables.dc];
@@ -1038,13 +1037,13 @@ void decode_block(FILE* file, bit_stream_t* stream, jpeg_state_t* state, jpeg_co
     }
 
     // DC
-    jpeg_huffman_lut_entry_t lut_entry = {0};
-    bit_stream_refill(file, stream);
-    lut_entry = huff_tbl_dc.left_shifted_code_lut[(size_t)(stream->bit_peek_buffer >> 48)];
-    bit_stream_advance(file, stream, (size_t)lut_entry.length);
+    const size_t left_shifted_code = (size_t)bit_stream_get_next_bits(file, stream, 16, 0);
+    jpeg_huffman_lut_entry_t lut_entry = huff_tbl_dc.left_shifted_code_lut[left_shifted_code];
+    bit_stream_get_next_bits(file, stream, (size_t)lut_entry.length, 1);
 
     const size_t n_bits_to_read = (size_t)lut_entry.symbol;
-    const int32_t value = bit_stream_read_value(file, stream, n_bits_to_read);
+    const int32_t raw_bits = bit_stream_get_next_bits(file, stream, n_bits_to_read, 1);
+    const int32_t value = parse_raw_value(raw_bits, n_bits_to_read);
 
     const size_t res2 = resolution * resolution;
 
@@ -1054,8 +1053,9 @@ void decode_block(FILE* file, bit_stream_t* stream, jpeg_state_t* state, jpeg_co
     // AC
     size_t block_cursor = 1;
     while(block_cursor < res2) {
-        lut_entry = huff_tbl_ac.left_shifted_code_lut[(size_t)(stream->bit_peek_buffer >> 48)];
-        bit_stream_advance(file, stream, (size_t)lut_entry.length);
+        const size_t left_shifted_code = (size_t)bit_stream_get_next_bits(file, stream, 16, 0);
+        lut_entry = huff_tbl_ac.left_shifted_code_lut[left_shifted_code];
+        bit_stream_get_next_bits(file, stream, (size_t)lut_entry.length, 1);
 
         if (lut_entry.symbol == 0x00) { // end of block marker
 #if DEBUG_VERBOSE
@@ -1078,16 +1078,20 @@ void decode_block(FILE* file, bit_stream_t* stream, jpeg_state_t* state, jpeg_co
         const size_t run_length = (size_t)(lut_entry.symbol >> 4);
         const size_t size = (size_t)(lut_entry.symbol & 0x0F);
 
-        for (size_t i = 0; i < run_length; ++i) {
+        // run of zeroes
+        size_t end = block_cursor + run_length;
+        if (end > res2) end = res2;
+
+        while (block_cursor < end) {
             block[block_cursor++] = 0;
         }
 
-        const int32_t value = bit_stream_read_value(file, stream, size);
-
-        block[block_cursor++] = (FLOAT)value;
+        // read bitstring and convert to signed integer
+        const uint32_t raw_bits = bit_stream_get_next_bits(file, stream, size, 1);
+        block[block_cursor++] = (FLOAT)parse_raw_value(raw_bits, size);
         
 #if DEBUG_VERBOSE
-        printf("%ix 0\n", run_length);
+        printf("%ix 0\n", (int)run_length);
         printf("%i\n", value);
 #endif
     }
@@ -1166,18 +1170,42 @@ void parse_image_data(FILE* file, jpeg_state_t* state) {
 
     // Allocate raw planes
     FLOAT* image_raw[256] = {NULL};
-    for (size_t comp_id = 0; comp_id < state->start_of_scan.n_components; ++comp_id) {
+    for (size_t comp_id = 0; comp_id < state->start_of_frame.n_components; ++comp_id) {
         image_raw[comp_id] = mem_alloc(raw_size * sizeof(FLOAT), state);
         memset(image_raw[comp_id], 0, raw_size * sizeof(FLOAT));
     }
-    FLOAT* block_scratch = mem_alloc(BLOCK_RES * BLOCK_RES * sizeof(FLOAT), state);
+    const size_t block_size = BLOCK_RES * BLOCK_RES * sizeof(FLOAT);
+    FLOAT* block_scratch = mem_alloc(block_size, state);
+    memset(block_scratch, 0, block_size);
     
     FLOAT dc_prev[256] = {0.0};
+                
+    int has_restarts = (state->restart_interval > 0);
+    int n_blocks_before_restart = state->restart_interval;
+
     for (size_t mcu_y = 0; mcu_y < n_mcu_y; ++mcu_y) {
         for (size_t mcu_x = 0; mcu_x < n_mcu_x; ++mcu_x) {
 #if DEBUG_VERBOSE
             printf("mcu (%i, %i)\n", (int)mcu_x, (int)mcu_y);
 #endif
+            if (has_restarts) {
+                --n_blocks_before_restart;
+                if (n_blocks_before_restart == 0) {
+
+                    memset(dc_prev, 0, sizeof(dc_prev));
+
+                    if (!stream.hold) {
+                        #if DEBUG
+                        printf("desync between restart markers and restart interval?");
+                        #endif
+                    }
+                    stream.hold = 0;
+
+                    bit_stream_align_to_next_byte(file, &stream);
+                    
+                    n_blocks_before_restart += 160;
+                }
+            }
 
             // Decode block -> mcu_scratch
             for (size_t comp_id = 0; comp_id < state->start_of_scan.n_components; ++comp_id) {
@@ -1191,7 +1219,7 @@ void parse_image_data(FILE* file, jpeg_state_t* state) {
 #if DEBUG_VERBOSE
                 printf("\tBLOCK MCU: %02X\n", component_info.blocks_per_mcu.u8);
 #endif
-                
+
                 for (size_t block_y = 0; block_y < height; ++block_y) {
                     for (size_t block_x = 0; block_x < width; ++block_x) {
                         decode_block(file, &stream, state, component_huff, quant, block_scratch, BLOCK_RES, &dc_prev[comp_id]);
@@ -1200,7 +1228,7 @@ void parse_image_data(FILE* file, jpeg_state_t* state) {
                         const size_t block_offset_x = (mcu_x * width * BLOCK_RES) + (block_x * BLOCK_RES);
                         const size_t block_offset_y = (mcu_y * height * BLOCK_RES) + (block_y * BLOCK_RES);
 #if DEBUG_VERBOSE
-                        printf("\t\tblock (%i, %i) at offset (%i, %i)\n", block_x, block_y, block_offset_x, block_offset_y);
+                        printf("\t\tblock (%i, %i) at offset (%i, %i)\n", (int)block_x, (int)block_y, (int)block_offset_x, (int)block_offset_y);
 #endif
 
                         for (size_t pixel_y = 0; pixel_y < BLOCK_RES; ++pixel_y) {
@@ -1252,6 +1280,7 @@ void parse_image_data(FILE* file, jpeg_state_t* state) {
     int index_i = -1;
     int index_q = -1;
 
+    // todo: figure out components properly
     for (size_t comp_id = 0; comp_id < state->start_of_scan.n_components; ++comp_id) {
         switch (state->start_of_scan.components[comp_id].id) {
             case COMP_ID_Y: index_y = comp_id; continue;
@@ -1262,6 +1291,10 @@ void parse_image_data(FILE* file, jpeg_state_t* state) {
         }
     }
 
+    printf("state->start_of_scan.n_components = %i\n", state->start_of_scan.n_components);
+    if (state->start_of_scan.n_components > 3) ERROR("n_components > 3!")
+    if (state->start_of_scan.n_components == 2) ERROR("n_components == 2!")
+    if (state->start_of_scan.n_components < 1) ERROR("n_components < 1!")
 
     // todo: handle these
     (void)index_i;
@@ -1337,6 +1370,10 @@ void handle_markers(FILE* in_file, jpeg_state_t* state) {
         size_t marker_start = ftell(in_file);
         size_t length = 0;
 
+        #if DEBUG
+        printf("marker = 0xFF%02X\n", marker.type);
+        #endif
+
         switch (marker.type) {
             case JPEG_MARKER_START_OF_FRAME0:
             case JPEG_MARKER_START_OF_FRAME1:
@@ -1364,7 +1401,7 @@ void handle_markers(FILE* in_file, jpeg_state_t* state) {
             case JPEG_MARKER_JFIF_APP14:       length = parse_jfif_app_todo(in_file); break;
             case JPEG_MARKER_JFIF_APP15:       length = parse_jfif_app_todo(in_file); break;
             case JPEG_MARKER_COMMENT:          length = parse_comment(in_file); break;
-            default:                          ERROR("Unknown marker"); break;
+            default:                           ERROR("Unknown marker"); break;
         }
 
         if (error_length > 0) {
