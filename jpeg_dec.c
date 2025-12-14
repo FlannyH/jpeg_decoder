@@ -6,7 +6,7 @@
 #include <threads.h>
 #include <time.h>
 
-// todo: restart marker handling
+// todo: make DEBUG_VERBOSE macro
 
 #if defined(_MSC_VER)
 #define ALIGN(a) __declspec(align(a))
@@ -836,7 +836,7 @@ void print_binary(uint64_t number, int32_t start_msb, int32_t n_bits) {
 typedef struct {
     uint64_t peek_buffer; // upper 16 bits will contain a key into the huffman table luts
     size_t peek_buffer_cursor; // so we can start writing to the peek buffer's most significant bits first, and then keep track as we shift them out
-    uint8_t hold; // makes the file stream stop until restarted externally
+    uint8_t hold; // makes the file stream stop shifting in new bytes, until restarted externally. used when encountering restart markers or end of image. 0 = no hold, 1 = restart marker, 2 = end of image
 } bit_stream_t;
 
 void bit_stream_init(bit_stream_t* stream) {
@@ -849,7 +849,7 @@ int32_t bit_stream_get_next_bits(FILE* file, bit_stream_t* stream, size_t n_bits
     if (n_bits >= 32) return 0; 
 
     // refill buffer
-    while (stream->peek_buffer_cursor < 56) {
+    while ((stream->peek_buffer_cursor < 56) && (stream->hold == 0)) {
         // todo: cache file data
         uint8_t next_byte = 0;
         fread(&next_byte, 1, 1, file);
@@ -864,11 +864,19 @@ int32_t bit_stream_get_next_bits(FILE* file, bit_stream_t* stream, size_t n_bits
                 next_byte = 0xFF;
             }
             else if (next_byte == JPEG_MARKER_END_OF_IMAGE) {
-                stream->hold = 1;
+                stream->hold = 2;
+                #if DEBUG_VERBOSE
+                printf("marker 0xFF%02X spotted at offset %08X\n", next_byte, (int)ftell(file));
+                #endif
+                break;
             }
             // detect restart markers
             else if (next_byte >= JPEG_MARKER_RST0 && next_byte <= JPEG_MARKER_RST7) {
                 stream->hold = 1;
+                #if DEBUG_VERBOSE
+                printf("marker 0xFF%02X spotted at offset %08X\n", next_byte, (int)ftell(file));
+                #endif
+                break;
             }
             else {
                 ERROR("Unknown marker");
@@ -888,18 +896,10 @@ int32_t bit_stream_get_next_bits(FILE* file, bit_stream_t* stream, size_t n_bits
         stream->peek_buffer <<= n_bits;
         stream->peek_buffer_cursor -= n_bits;
     }
+    #if DEBUG_VERBOSE
+    printf("ftell(): 0x%08X\n", (int)ftell(file));
+    #endif
     return value;
-}
-
-void bit_stream_align_to_next_byte(FILE* file, bit_stream_t* stream) {
-    // check our current byte alignment
-    const size_t peek_mod_8 = stream->peek_buffer_cursor % 8;
-    
-    // return early if stream is already aligned to a byte
-    if (peek_mod_8 == 0) return; 
-
-    // skip the bytes beyond the cursor (for example, peek_mod_8=5, we will advance 3 to get to 8)
-    bit_stream_get_next_bits(file, stream, 8 - peek_mod_8, 1);
 }
 
 void entropy_decode(FLOAT *restrict block, jpeg_state_t* state) {
@@ -1181,7 +1181,7 @@ void parse_image_data(FILE* file, jpeg_state_t* state) {
     FLOAT dc_prev[256] = {0.0};
                 
     int has_restarts = (state->restart_interval > 0);
-    int n_blocks_before_restart = state->restart_interval;
+    int n_mcus_before_restart = state->restart_interval;
 
     for (size_t mcu_y = 0; mcu_y < n_mcu_y; ++mcu_y) {
         for (size_t mcu_x = 0; mcu_x < n_mcu_x; ++mcu_x) {
@@ -1189,22 +1189,28 @@ void parse_image_data(FILE* file, jpeg_state_t* state) {
             printf("mcu (%i, %i)\n", (int)mcu_x, (int)mcu_y);
 #endif
             if (has_restarts) {
-                --n_blocks_before_restart;
-                if (n_blocks_before_restart == 0) {
+                if (n_mcus_before_restart == 0) {
 
                     memset(dc_prev, 0, sizeof(dc_prev));
 
                     if (!stream.hold) {
                         #if DEBUG
-                        printf("desync between restart markers and restart interval?");
+                        printf("desync between restart markers and restart interval?\n");
+                        printf("ftell() %i\n", (int)ftell(file));
+                        printf("mcu %i at (%i, %i)\n", (int)((mcu_y * n_mcu_x) + mcu_x), (int)mcu_x, (int)mcu_y);
                         #endif
                     }
-                    stream.hold = 0;
-
-                    bit_stream_align_to_next_byte(file, &stream);
                     
-                    n_blocks_before_restart += 160;
+                    // restart the bitstream on the byte after the restart marker
+                    if (stream.hold == 1) {
+                        stream.hold = 0;
+
+                        bit_stream_init(&stream);
+                    }
+                    
+                    n_mcus_before_restart += state->restart_interval;
                 }
+                --n_mcus_before_restart;
             }
 
             // Decode block -> mcu_scratch
@@ -1222,7 +1228,7 @@ void parse_image_data(FILE* file, jpeg_state_t* state) {
 
                 for (size_t block_y = 0; block_y < height; ++block_y) {
                     for (size_t block_x = 0; block_x < width; ++block_x) {
-                        decode_block(file, &stream, state, component_huff, quant, block_scratch, BLOCK_RES, &dc_prev[comp_id]);
+                        decode_block(file, &stream, state, component_huff, quant, block_scratch, BLOCK_RES, &dc_prev[component_huff.id]);
 
                         // Place in raw buffer
                         const size_t block_offset_x = (mcu_x * width * BLOCK_RES) + (block_x * BLOCK_RES);
