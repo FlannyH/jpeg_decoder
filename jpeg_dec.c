@@ -635,7 +635,7 @@ size_t parse_quant_table(FILE* file, jpeg_state_t* state) {
             ERROR("invalid table precision");
         }
 
-        const size_t table_buf_size = 64 + (64 * precision);
+        const size_t table_buf_size = BLOCK_RES + (BLOCK_RES * precision);
 
         // allocate new quantization table
         if (state->n_quant_tables <= table_id) {
@@ -784,8 +784,8 @@ size_t parse_start_of_scan(FILE* file, jpeg_state_t* state) {
     if (header.n_components == 0 || header.n_components > 4) {
         ERROR("invalid number of components in scan")
     }
-    if (header.spectral_selection_min > 63 || header.spectral_selection_max > 63) {
-        ERROR("invalid spectral selection for scan (selection exceeds limit of 64)");
+    if (header.spectral_selection_min >= BLOCK_RES || header.spectral_selection_max >= BLOCK_RES) {
+        ERROR("invalid spectral selection for scan (selection exceeds block resolution)");
     }
     if (header.spectral_selection_min > header.spectral_selection_max) {
         ERROR("invalid spectral selection for scan (min is greater than max)");
@@ -990,7 +990,7 @@ void idct_2d(FLOAT *restrict block, jpeg_state_t *state) {
 void debug_block(const FLOAT* block) {
 #if DEBUG_VERBOSE
     printf("BLOCK VALUES:\n");
-    for (size_t i = 0; i < 64; ++i) {
+    for (size_t i = 0; i < (BLOCK_RES * BLOCK_RES); ++i) {
         if(i % BLOCK_RES == 0) printf("\n");
         printf("%6.2f, ", block[i]);
     }
