@@ -1493,6 +1493,13 @@ Log jpeg_pre_render(Pre_Rendering_Info* pre_info) {
 Log jpeg_render(Pre_Rendering_Info* pre_info, Rendering_Info* render_info) {
     jpeg_pre_render(pre_info);
     
+    if (error_length > 0) {
+        return (Log){LOG_TYPE_ERROR, {
+            .count = error_length, 
+            .data = (uint8_t*)&error_buffer
+        }};
+    }
+    
     jpeg_state_t* state = (jpeg_state_t*)pre_info->user_ptr;
     fseek(pre_info->fileptr, state->image_data_start, SEEK_SET);
     
