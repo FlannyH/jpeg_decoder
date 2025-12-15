@@ -122,15 +122,6 @@ typedef enum {
 } jpeg_byte_order_t;
 
 typedef enum {
-    COMP_ID_UNDEFINED = 0,
-    COMP_ID_Y = 1,
-    COMP_ID_CB = 2,
-    COMP_ID_CR = 3,
-    COMP_ID_I = 4, // todo: does this exist?
-    COMP_ID_Q = 5, // todo: does this exist?
-} jpeg_component_id_t;
-
-typedef enum {
     JPEG_SCAN_MODE_BASELINE = 0,
     JPEG_SCAN_MODE_EXTENDED = 1,
     JPEG_SCAN_MODE_PROGRESSIVE = 2,
@@ -642,9 +633,6 @@ size_t parse_quant_table(FILE* file, jpeg_state_t* state) {
                 printf("precision %i\n", header.table_id);
             #endif
             ERROR("invalid table precision");
-        }
-        if (precision == 1) { // todo
-            printf("high precision quantization table found (unimplemented, expect jank)!\n");
         }
 
         const size_t table_buf_size = 64 + (64 * precision);
@@ -1279,37 +1267,20 @@ void parse_image_data(FILE* file, jpeg_state_t* state) {
         }
     }
 
+    // todo: parse APP14, and verify that this assumption is sound
     // components -> RGB
-    int index_y = -1;
-    int index_cb = -1;
-    int index_cr = -1;
-    int index_i = -1;
-    int index_q = -1;
+    int index_y = 0;
+    int index_cb = 1;
+    int index_cr = 2;
 
-    // todo: figure out components properly
-    for (size_t comp_id = 0; comp_id < state->start_of_scan.n_components; ++comp_id) {
-        switch (state->start_of_scan.components[comp_id].id) {
-            case COMP_ID_Y: index_y = comp_id; continue;
-            case COMP_ID_CB: index_cb = comp_id; continue;
-            case COMP_ID_CR: index_cr = comp_id; continue;
-            case COMP_ID_I: index_i = comp_id; continue;
-            case COMP_ID_Q: index_q = comp_id; continue;
-        }
-    }
-
-    printf("state->start_of_scan.n_components = %i\n", state->start_of_scan.n_components);
-    if (state->start_of_scan.n_components > 3) ERROR("n_components > 3!")
-    if (state->start_of_scan.n_components == 2) ERROR("n_components == 2!")
-    if (state->start_of_scan.n_components < 1) ERROR("n_components < 1!")
-
-    // todo: handle these
-    (void)index_i;
-    (void)index_q;
+    if (state->start_of_frame.n_components > 3) ERROR("n_components > 3!")
+    if (state->start_of_frame.n_components == 2) ERROR("n_components == 2!")
+    if (state->start_of_frame.n_components < 1) ERROR("n_components < 1!")
 
     rgb8_t *restrict out_image = mem_alloc(out_w * out_h * sizeof(rgb8_t), state);
 
     // Grayscale with a single Y component
-    if (state->start_of_scan.n_components == 1 && index_y >= 0) {
+    if (state->start_of_scan.n_components == 1) {
         const FLOAT *restrict image = image_raw[0];
 
         size_t pixel_index = 0;
@@ -1334,7 +1305,7 @@ void parse_image_data(FILE* file, jpeg_state_t* state) {
     }
 
     // YCbCr
-    else if (state->start_of_scan.n_components == 3 && index_y >= 0 && index_cb >= 0 && index_cr >= 0) {
+    else if (state->start_of_frame.n_components == 3) {
         const FLOAT *restrict image_y_ = image_raw[index_y];
         const FLOAT *restrict image_cb = image_raw[index_cb];
         const FLOAT *restrict image_cr = image_raw[index_cr];
@@ -1350,6 +1321,8 @@ void parse_image_data(FILE* file, jpeg_state_t* state) {
             pixel_index += (raw_w - out_w);
         }
     }
+
+    // todo: RGB
 
     else {
         TODO()
