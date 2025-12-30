@@ -1,0 +1,517 @@
+mkdir -p obj
+mkdir -p build
+gcc -Wall -Wextra -std=c11 -g3 -O0 jpeg_dec.c -o build/jpeg_dec -lm -DSTANDALONE=1 -DMIV_LIBRARY=0
+objdump -d build/jpeg_dec -l > obj/jpeg_dec_standalone.s
+gcc -Wall -Wextra -std=c11 -g3 -O0 jpeg_dec.c -o build/jpeg_dec.so -lm -fPIC -shared -DSTANDALONE=0 -DMIV_LIBRARY=1
+objdump -d build/jpeg_dec.so -l > obj/jpeg_dec_miv.s
+
+./test/2kb_christmas.jpg
+marker = 0xFFD8
+marker = 0xFFE0
+marker = 0xFFDB
+marker = 0xFFDB
+marker = 0xFFC2
+error: jpeg_dec.c:553: progressive jpeg not yet implemented
+
+./test/50906488116_5464d321fe_o.jpg
+marker = 0xFFD8
+marker = 0xFFED
+marker = 0xFFE2
+marker = 0xFFE1
+marker = 0xFFDB
+marker = 0xFFDD
+marker = 0xFFEE
+marker = 0xFFC0
+marker = 0xFFC4
+marker = 0xFFDA
+state->start_of_scan.n_components = 3
+todo: jpeg_dec.c:1374
+
+./test/51006497323_272b26bc1f_o.jpg
+marker = 0xFFD8
+marker = 0xFFED
+marker = 0xFFE2
+marker = 0xFFE1
+marker = 0xFFDB
+marker = 0xFFDD
+marker = 0xFFEE
+marker = 0xFFC0
+marker = 0xFFC4
+marker = 0xFFDA
+state->start_of_scan.n_components = 3
+todo: jpeg_dec.c:1374
+
+./test/51007202541_ea453871d8_o.jpg
+marker = 0xFFD8
+marker = 0xFFED
+marker = 0xFFE2
+marker = 0xFFE1
+marker = 0xFFDB
+marker = 0xFFDD
+marker = 0xFFEE
+marker = 0xFFC0
+marker = 0xFFC4
+marker = 0xFFDA
+state->start_of_scan.n_components = 3
+todo: jpeg_dec.c:1374
+
+./test/51354114195_a90ea7908d_o.jpg
+marker = 0xFFD8
+marker = 0xFFE1
+marker = 0xFFED
+marker = 0xFFE1
+marker = 0xFFE2
+marker = 0xFFEE
+marker = 0xFFDB
+marker = 0xFFC0
+marker = 0xFFDD
+marker = 0xFFC4
+marker = 0xFFDA
+state->start_of_scan.n_components = 3
+wrote bmp to ./result/51354114195_a90ea7908d_o.bmp
+
+./test/51369631902_cbc5ae14ac_o.jpg
+marker = 0xFFD8
+marker = 0xFFE1
+marker = 0xFFED
+marker = 0xFFE1
+marker = 0xFFE2
+marker = 0xFFEE
+marker = 0xFFDB
+marker = 0xFFC0
+marker = 0xFFDD
+marker = 0xFFC4
+marker = 0xFFDA
+state->start_of_scan.n_components = 3
+wrote bmp to ./result/51369631902_cbc5ae14ac_o.bmp
+
+./test/51370391101_804992aa35_o.jpg
+marker = 0xFFD8
+marker = 0xFFED
+marker = 0xFFE2
+marker = 0xFFE1
+marker = 0xFFDB
+marker = 0xFFDD
+marker = 0xFFEE
+marker = 0xFFC0
+marker = 0xFFC4
+marker = 0xFFDA
+state->start_of_scan.n_components = 3
+todo: jpeg_dec.c:1374
+
+./test/51370391111_a43a3825e5_o.jpg
+marker = 0xFFD8
+marker = 0xFFED
+marker = 0xFFE2
+marker = 0xFFE1
+marker = 0xFFDB
+marker = 0xFFDD
+marker = 0xFFEE
+marker = 0xFFC0
+marker = 0xFFC4
+marker = 0xFFDA
+state->start_of_scan.n_components = 3
+todo: jpeg_dec.c:1374
+
+./test/7EB2FEC2-8F3F-4DD8-9B4A-6F18B2416489.jpg
+marker = 0xFFD8
+marker = 0xFFE1
+marker = 0xFFED
+marker = 0xFFC0
+marker = 0xFFC4
+marker = 0xFFC4
+marker = 0xFFC4
+marker = 0xFFC4
+marker = 0xFFDB
+marker = 0xFFDB
+marker = 0xFFDD
+marker = 0xFFDA
+state->start_of_scan.n_components = 3
+wrote bmp to ./result/7EB2FEC2-8F3F-4DD8-9B4A-6F18B2416489.bmp
+
+./test/9445646026_9d3222658e_o.jpg
+marker = 0xFFD8
+marker = 0xFFE1
+marker = 0xFFED
+marker = 0xFFE1
+marker = 0xFFE2
+marker = 0xFFEE
+marker = 0xFFDB
+marker = 0xFFC0
+marker = 0xFFDD
+marker = 0xFFC4
+marker = 0xFFDA
+state->start_of_scan.n_components = 3
+wrote bmp to ./result/9445646026_9d3222658e_o.bmp
+
+./test/9453666332_2c6814f9f8_o.jpg
+marker = 0xFFD8
+marker = 0xFFE1
+marker = 0xFFED
+marker = 0xFFE1
+marker = 0xFFE2
+marker = 0xFFEE
+marker = 0xFFDB
+marker = 0xFFC0
+marker = 0xFFDD
+marker = 0xFFC4
+marker = 0xFFDA
+state->start_of_scan.n_components = 3
+wrote bmp to ./result/9453666332_2c6814f9f8_o.bmp
+
+./test/amiya_texas_and_exusiai_arknights__83c62ada7d7980471eeb349a15392bac.jpg
+marker = 0xFFD8
+marker = 0xFFE0
+marker = 0xFFEE
+marker = 0xFFFE
+marker = 0xFFDB
+marker = 0xFFDB
+marker = 0xFFC0
+marker = 0xFFC4
+marker = 0xFFC4
+marker = 0xFFC4
+marker = 0xFFC4
+marker = 0xFFDA
+state->start_of_scan.n_components = 3
+wrote bmp to ./result/amiya_texas_and_exusiai_arknights__83c62ada7d7980471eeb349a15392bac.bmp
+
+./test/nixie1.jpg
+marker = 0xFFD8
+marker = 0xFFE0
+marker = 0xFFDB
+marker = 0xFFDB
+marker = 0xFFC2
+error: jpeg_dec.c:553: progressive jpeg not yet implemented
+
+./test/nixie2.jpg
+marker = 0xFFD8
+marker = 0xFFE0
+marker = 0xFFDB
+marker = 0xFFDB
+marker = 0xFFC0
+marker = 0xFFC4
+marker = 0xFFC4
+marker = 0xFFC4
+marker = 0xFFC4
+marker = 0xFFDA
+state->start_of_scan.n_components = 3
+wrote bmp to ./result/nixie2.bmp
+
+./test/S33.jpg
+marker = 0xFFD8
+marker = 0xFFE0
+marker = 0xFFE2
+marker = 0xFFDB
+marker = 0xFFDB
+marker = 0xFFC2
+error: jpeg_dec.c:553: progressive jpeg not yet implemented
+
+./test/StandingThere.jpg
+marker = 0xFFD8
+marker = 0xFFE0
+marker = 0xFFE2
+marker = 0xFFDB
+marker = 0xFFDB
+marker = 0xFFC2
+error: jpeg_dec.c:553: progressive jpeg not yet implemented
+
+./test/test10.jpg
+marker = 0xFFD8
+marker = 0xFFE0
+marker = 0xFFE1
+marker = 0xFFDB
+marker = 0xFFDB
+marker = 0xFFC0
+marker = 0xFFC4
+marker = 0xFFC4
+marker = 0xFFC4
+marker = 0xFFC4
+marker = 0xFFDA
+state->start_of_scan.n_components = 3
+wrote bmp to ./result/test10.bmp
+
+./test/test11.jpg.tags
+error: jpeg_dec.c:1168: no channel info found!
+
+./test/test12.jpg
+marker = 0xFFD8
+marker = 0xFFE0
+marker = 0xFFE1
+marker = 0xFFDB
+marker = 0xFFDB
+marker = 0xFFC0
+marker = 0xFFC4
+marker = 0xFFC4
+marker = 0xFFC4
+marker = 0xFFC4
+marker = 0xFFDA
+state->start_of_scan.n_components = 3
+wrote bmp to ./result/test12.bmp
+
+./test/test14.jpg
+marker = 0xFFD8
+marker = 0xFFE0
+marker = 0xFFE1
+marker = 0xFFDB
+marker = 0xFFDB
+marker = 0xFFC0
+marker = 0xFFC4
+marker = 0xFFC4
+marker = 0xFFC4
+marker = 0xFFC4
+marker = 0xFFDA
+state->start_of_scan.n_components = 3
+wrote bmp to ./result/test14.bmp
+
+./test/test15.jpg
+marker = 0xFFD8
+marker = 0xFFE0
+marker = 0xFFE1
+marker = 0xFFE1
+marker = 0xFFE1
+marker = 0xFFE2
+marker = 0xFFDB
+marker = 0xFFC0
+marker = 0xFFC4
+marker = 0xFFC4
+marker = 0xFFC4
+marker = 0xFFC4
+marker = 0xFFDA
+state->start_of_scan.n_components = 3
+wrote bmp to ./result/test15.bmp
+
+./test/test16.jpg
+marker = 0xFFD8
+marker = 0xFFE1
+marker = 0xFFE4
+marker = 0xFFE2
+marker = 0xFFEB
+marker = 0xFFC4
+marker = 0xFFDB
+marker = 0xFFC0
+marker = 0xFFDA
+state->start_of_scan.n_components = 3
+wrote bmp to ./result/test16.bmp
+
+./test/test17.jpg
+marker = 0xFFD8
+marker = 0xFFE1
+marker = 0xFFEC
+marker = 0xFFE1
+marker = 0xFFEE
+marker = 0xFFDB
+marker = 0xFFC0
+marker = 0xFFC4
+marker = 0xFFDA
+state->start_of_scan.n_components = 3
+wrote bmp to ./result/test17.bmp
+
+./test/test1.jpg
+marker = 0xFFD8
+marker = 0xFFE0
+marker = 0xFFE1
+marker = 0xFFDB
+marker = 0xFFDB
+marker = 0xFFC0
+marker = 0xFFC4
+marker = 0xFFC4
+marker = 0xFFC4
+marker = 0xFFC4
+marker = 0xFFDA
+state->start_of_scan.n_components = 3
+wrote bmp to ./result/test1.bmp
+
+./test/test2.jpg
+marker = 0xFFD8
+marker = 0xFFE0
+marker = 0xFFE1
+marker = 0xFFDB
+marker = 0xFFDB
+marker = 0xFFC0
+marker = 0xFFC4
+marker = 0xFFC4
+marker = 0xFFC4
+marker = 0xFFC4
+marker = 0xFFDA
+state->start_of_scan.n_components = 3
+wrote bmp to ./result/test2.bmp
+
+./test/test3.jpg
+marker = 0xFFD8
+marker = 0xFFE0
+marker = 0xFFE1
+marker = 0xFFDB
+marker = 0xFFDB
+marker = 0xFFC0
+marker = 0xFFC4
+marker = 0xFFC4
+marker = 0xFFC4
+marker = 0xFFC4
+marker = 0xFFDA
+state->start_of_scan.n_components = 3
+wrote bmp to ./result/test3.bmp
+
+./test/test4.jpg
+marker = 0xFFD8
+marker = 0xFFE0
+marker = 0xFFE1
+marker = 0xFFDB
+marker = 0xFFDB
+marker = 0xFFC0
+marker = 0xFFC4
+marker = 0xFFC4
+marker = 0xFFC4
+marker = 0xFFC4
+marker = 0xFFDA
+state->start_of_scan.n_components = 3
+wrote bmp to ./result/test4.bmp
+
+./test/test5.jpg
+marker = 0xFFD8
+marker = 0xFFE0
+marker = 0xFFE1
+marker = 0xFFDB
+marker = 0xFFDB
+marker = 0xFFC0
+marker = 0xFFC4
+marker = 0xFFC4
+marker = 0xFFC4
+marker = 0xFFC4
+marker = 0xFFDA
+state->start_of_scan.n_components = 3
+wrote bmp to ./result/test5.bmp
+
+./test/test6.jpg
+marker = 0xFFD8
+marker = 0xFFE0
+marker = 0xFFE1
+marker = 0xFFDB
+marker = 0xFFDB
+marker = 0xFFC0
+marker = 0xFFC4
+marker = 0xFFC4
+marker = 0xFFC4
+marker = 0xFFC4
+marker = 0xFFDA
+state->start_of_scan.n_components = 3
+wrote bmp to ./result/test6.bmp
+
+./test/test7.jpg
+marker = 0xFFD8
+marker = 0xFFE0
+marker = 0xFFE1
+marker = 0xFFDB
+marker = 0xFFDB
+marker = 0xFFC0
+marker = 0xFFC4
+marker = 0xFFC4
+marker = 0xFFC4
+marker = 0xFFC4
+marker = 0xFFDA
+state->start_of_scan.n_components = 3
+wrote bmp to ./result/test7.bmp
+
+./test/test8.jpg
+marker = 0xFFD8
+marker = 0xFFE0
+marker = 0xFFE1
+marker = 0xFFDB
+marker = 0xFFDB
+marker = 0xFFC0
+marker = 0xFFC4
+marker = 0xFFC4
+marker = 0xFFC4
+marker = 0xFFC4
+marker = 0xFFDA
+state->start_of_scan.n_components = 3
+wrote bmp to ./result/test8.bmp
+
+./test/test9.jpg
+marker = 0xFFD8
+marker = 0xFFE0
+marker = 0xFFE1
+marker = 0xFFDB
+marker = 0xFFDB
+marker = 0xFFC0
+marker = 0xFFC4
+marker = 0xFFC4
+marker = 0xFFC4
+marker = 0xFFC4
+marker = 0xFFDA
+state->start_of_scan.n_components = 3
+wrote bmp to ./result/test9.bmp
+
+./test/testimgari.jpg
+marker = 0xFFD8
+marker = 0xFFE0
+marker = 0xFFDB
+marker = 0xFFDB
+marker = 0xFFC9
+error: jpeg_dec.c:1429: Unknown marker
+
+./test/testimgint.jpg
+marker = 0xFFD8
+marker = 0xFFE0
+marker = 0xFFDB
+marker = 0xFFDB
+marker = 0xFFC0
+marker = 0xFFC4
+marker = 0xFFC4
+marker = 0xFFC4
+marker = 0xFFC4
+marker = 0xFFDA
+state->start_of_scan.n_components = 3
+wrote bmp to ./result/testimgint.bmp
+
+./test/testorig12.jpg
+marker = 0xFFD8
+marker = 0xFFE0
+marker = 0xFFDB
+marker = 0xFFDB
+marker = 0xFFC1
+marker = 0xFFC4
+marker = 0xFFC4
+marker = 0xFFC4
+marker = 0xFFC4
+marker = 0xFFDA
+state->start_of_scan.n_components = 3
+wrote bmp to ./result/testorig12.bmp
+
+./test/testorig.jpg
+marker = 0xFFD8
+marker = 0xFFE0
+marker = 0xFFDB
+marker = 0xFFDB
+marker = 0xFFC0
+marker = 0xFFC4
+marker = 0xFFC4
+marker = 0xFFC4
+marker = 0xFFC4
+marker = 0xFFDA
+state->start_of_scan.n_components = 3
+wrote bmp to ./result/testorig.bmp
+
+./test/win365.jpg
+marker = 0xFFD8
+marker = 0xFFE1
+marker = 0xFFED
+marker = 0xFFE1
+marker = 0xFFEE
+marker = 0xFFDB
+marker = 0xFFC2
+error: jpeg_dec.c:553: progressive jpeg not yet implemented
+
+./test/test13.jpg
+marker = 0xFFD8
+marker = 0xFFE0
+marker = 0xFFE1
+marker = 0xFFDB
+marker = 0xFFDB
+marker = 0xFFC0
+marker = 0xFFC4
+marker = 0xFFC4
+marker = 0xFFC4
+marker = 0xFFC4
+marker = 0xFFDA
+state->start_of_scan.n_components = 3
+wrote bmp to ./result/test13.bmp

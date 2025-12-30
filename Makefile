@@ -33,8 +33,9 @@ $(BUILD_DIR)/$(NAME)$(LIB_EXT): $(SOURCE_DIR)/jpeg_dec.c $(BUILD_DIR)
 	$(CC) $(CFLAGS) $< -o $@ -lm -fPIC -shared -DSTANDALONE=0 -DMIV_LIBRARY=1
 
 CC = gcc
-# CFLAGS = -Wall -Wextra -std=c11 -g3 -O0
-CFLAGS = -Wall -Wextra -std=c11 -O3 -ftree-vectorize -msse2 -ffast-math
+# CFLAGS = -Wall -Wextra -std=c11 -g3 -O0 -fsanitize=address
+CFLAGS = -Wall -Wextra -std=c11 -g3 -O0
+# CFLAGS = -Wall -Wextra -std=c11 -O3 -ftree-vectorize -msse2 -ffast-math
 
 $(OBJ_DIR):
 	mkdir -p $(OBJ_DIR)

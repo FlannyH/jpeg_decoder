@@ -1,0 +1,86 @@
+notes:
+- SOF0 works
+- SOF1 works (tho id prefer more test images, spec. for high prec quant tables)
+- SOF2:
+    - progressive coding
+
+
+the idea for decoding a jpeg is:
+- collect tables as you decode the file the file
+- if hierarchical:
+    - multiple frames
+    - frames can be different resolution (frame 0 low res, frame 1 fill in the gaps)
+    - if differential, curr frame is based on prev frame
+- if progressive
+    - multiple scans per frame
+    - preallocate all the DCT blocks
+    - collect coefficients from all frames
+    - decode DCT blocks
+
+
+
+
+https://www.w3.org/Graphics/JPEG/itu-t81.pdf useful stuff:
+- 3.1.11: a DCT block is defined as 8x8
+- 4.4: the delta encoding of the DC component is referred to as differential DC encoding
+- 4.4: DCT: bitstream -> entropy decoder -> dequantizer -> IDCT -> image
+- 4.4: lossless: bitstream -> entropy decoder -> predictor? -> image
+- 4.5: sequential DCT: 8x8 blocks with 64 coefficients, left to right then top to bottom, as already implemented
+- 4.5: progressive DCT: same as seq DCT, but in multiple scans:
+    - all blocks are preallocated
+    - spectral selection:
+        - scan header defines min and max spectral selection
+        - instead of going from 0 to 63, only check the ones in the spectral selection (start on min, end on max)
+        - keep filling the block buffer in passes
+    - successive approximation:
+        - most significant bits stored first, followed by less significant bits
+4.5: hierarchical:
+    - instead of scans, image is encoded as a sequence of frames
+    - first frame is just a low quality image
+    - next frames can be differential:
+        - take current state of reconstructed image
+        - decode next frame 
+        - add next frame to reconstructed image
+    - consecutive frames can be different resolution
+    - coding of the difference can be either only DCT, only lossless
+    - last frame can be either DCT or lossless
+4.6: base jpeg uses huffman, extended and lossless use either huffman or arithmetic coding
+4.7: sample precision:
+    - base jpeg is 8 bit per sample
+    - extended can be 8 or 12 bit per sample?
+    - lossless is 2 bit to 16 bit
+4.8.1: non-interleaved: first all blocks of comp0, then comp1, then comp2, encoded in multiple scans (one scan per component)
+4.8.1: interleaved: one big scan of repeat [comp0, comp1, comp2], except it could also be [0, 0, 0, 0, 1, 2] if downsampled
+4.9: restart markers:
+    - split the entropy coded bit stream into segments
+    - segments can be processed independently (multithreading?)
+    - segments isolate data corruption
+4.9.1: interchange format: requires all quant tables and huffman/arithmetic tables to be present in the file
+4.9.2: abbreviated format (image data): may leave out some of the table (where would we get the omitted tables from?) 
+4.9.3: abbreviated format (table data): only has tables (probably a way to split shared tables into a separate file, and then just encode image data for the other abbrv format?)
+(i think the abbreviated formats are not relevant for my jpeg decoder, seems very situational)
+(insert the entirety of page 26 of the t81 spec here)
+4.10: in progressive mode: dc coefficients for the first scan may be interleaved?
+
+A.2: single-component images are non-interleaved by definition (seems pretty obvious but nice)
+A.2.3: interleaved order: blocks within an mcu are stored in an order close to how a tv draws an image
+A.3.5: DC(i) = DC(i-1) + rawDC(i)
+A.4: point transform:
+    - "data may be optionally divided by a power of 2 by a point transform prior to coding"
+    - lossless, lossless hierarchical differential frame, and progressive successive approximation coding require it?
+A.5: arithmetic rules:
+    - div by 2 = arithmetic shift right by 1
+    - differences are encoded in 16-bits: modulo 65536 (val & 0xFFFF) before encoding
+
+B.1.1.5: padding rules:
+    - 0xFF -> 0xFF 0x00 (avoid marker)
+    - align to single byte at the end of a segment
+B.2.1: seq-DCT & lossless has 1 <= components <= 4, interleaved if >= 2 components
+B.2.1: 
+
+
+decoder flow:
+    - allocate enough space to store all the blocks for each component (at their downsampled resolution)
+    - decode the blocks (draw the rest of the owl lmao)
+    - linearly(?) upscale component planes
+    - 

@@ -6,6 +6,9 @@
 #include <threads.h>
 #include <time.h>
 
+// todo next: progressive scan
+// - if only one component in a scan, the subsampling swizzling is ignored
+// - 
 
 #if defined(_MSC_VER)
 #define ALIGN(a) __declspec(align(a))
@@ -13,10 +16,10 @@
 #define ALIGN(a) __attribute__((aligned(a)))
 #endif
 
-#define DEBUG 0
-#define DEBUG_ERROR 0
+#define DEBUG 1
+#define DEBUG_ERROR 1
 #define DEBUG_VERBOSE 0
-#define DEBUG_MEMORY 0
+#define DEBUG_MEMORY 1
 #define PROFILING 0
 #define FLOAT float
 #define pi 3.141592653589793
@@ -332,6 +335,8 @@ typedef struct {
 #define MAX_ALLOC_COUNT 256
     void* allocated_chunks[MAX_ALLOC_COUNT];
     size_t alloc_cursor;
+
+    int eob_run;
 
     jpeg_channel_t components[256];
     size_t component_mapping[256];
@@ -940,8 +945,7 @@ int32_t parse_raw_value(int32_t value, int32_t n_bits) {
     return value;
 }
 
-// returns end of block run (i.e. blocks to skip after this)
-size_t fetch_coefficients(FILE* file, bit_stream_t* stream, jpeg_state_t* state, size_t scan_comp_id, size_t block_index, size_t ss_start, size_t ss_end) {
+void fetch_coefficients(FILE* file, bit_stream_t* stream, jpeg_state_t* state, size_t scan_comp_id, size_t block_index, size_t ss_start, size_t ss_end) {
     // find component info and tables
     jpeg_component_t* component_huff = &state->start_of_scan.components[scan_comp_id];
     jpeg_huffman_table_decoded_t* huff_tbl_dc = &state->huffman_tables_dc[(size_t)component_huff->tables.dc];
@@ -965,82 +969,200 @@ size_t fetch_coefficients(FILE* file, bit_stream_t* stream, jpeg_state_t* state,
     const int32_t ah = (int32_t)state->start_of_scan.successive_approximation >> 4;
     const int32_t al = (int32_t)state->start_of_scan.successive_approximation & 0x0F;
 
-    // fetch DC component
-    if (spectral_index == 0) {
-        const size_t left_shifted_code = (size_t)bit_stream_get_next_bits(file, stream, 16, 0);
-        jpeg_huffman_lut_entry_t lut_entry = huff_tbl_dc->left_shifted_code_lut[left_shifted_code];
-        bit_stream_get_next_bits(file, stream, (size_t)lut_entry.length, 1);
+    const int first_visit = (ah == 0);
 
-        print_binary(left_shifted_code, 15, lut_entry.length);
+    if (first_visit && (state->eob_run > 0)) {
+        --state->eob_run;
+        return;
+    }
 
-        const size_t size = (size_t)lut_entry.symbol;
-        const int32_t raw_bits = bit_stream_get_next_bits(file, stream, size, 1);
-        int32_t value = parse_raw_value(raw_bits, size);
+    // first visit
+    if (first_visit) {
+        // DC component
+        if (spectral_index == 0) {
+            // read huffman symbol
+            const size_t left_shifted_code = (size_t)bit_stream_get_next_bits(file, stream, 16, 0);
+            jpeg_huffman_lut_entry_t lut_entry = huff_tbl_dc->left_shifted_code_lut[left_shifted_code];
+            bit_stream_get_next_bits(file, stream, (size_t)lut_entry.length, 1);
+            print_binary(left_shifted_code, 15, lut_entry.length);
 
-        print_binary(raw_bits, size - 1, size);
-
-        // if this is the first DC scan, or not a progressive scan at all, apply dpcm
-        if (ah == 0) {
+            // read value
+            const size_t size = (size_t)lut_entry.symbol;
+            const int32_t raw_bits = bit_stream_get_next_bits(file, stream, size, 1);
+            int32_t value = parse_raw_value(raw_bits, size);
+            print_binary(raw_bits, size - 1, size);
+            
+            // apply dpcm and store
             value += component_info->dc_prev;
             component_info->dc_prev = value;
             curr_block->coefficients[0] = (value << al);
+            ++spectral_index;
         }
-        // in subsequent scans (indicated by ah != 0), only change a single bit
-        else {
-            curr_block->coefficients[0] |= (raw_bits << al);
+
+        // AC components
+        while (spectral_index <= ss_end) {
+            // read huffman symbol
+            const size_t left_shifted_code = (size_t)bit_stream_get_next_bits(file, stream, 16, 0);
+            lut_entry = huff_tbl_ac->left_shifted_code_lut[left_shifted_code];
+            bit_stream_get_next_bits(file, stream, (size_t)lut_entry.length, 1);
+            print_binary(left_shifted_code, 15, lut_entry.length);
+
+            // end of block run
+            if (((lut_entry.symbol & 0x0F) == 0) && (lut_entry.symbol != 0xF0)) {
+                const size_t size = (size_t)(lut_entry.symbol >> 4);
+                if (size == 0) return;
+
+                const uint32_t raw_bits = bit_stream_get_next_bits(file, stream, size, 1);
+                const uint32_t run_length = raw_bits + (1 << size);
+                state->eob_run = (size_t)run_length - 1; // this block is included
+                return;
+            }
+            
+            // otherwise, symbol is split into 0xRS, with R = run length, S = size, as in number of bits to read next
+            size_t run_length = (size_t)(lut_entry.symbol >> 4);
+            const size_t size = (size_t)(lut_entry.symbol & 0x0F);
+            const uint32_t raw_bits = bit_stream_get_next_bits(file, stream, size, 1);
+            print_binary(raw_bits, size - 1, size);
+
+            // rle and store value
+            spectral_index += run_length;
+            if (spectral_index > ss_end) return;
+            curr_block->coefficients[spectral_index] += parse_raw_value(raw_bits, size) << al;
+            ++spectral_index;
         }
-        ++spectral_index;
     }
 
-    // fetch AC components
-    while (spectral_index <= ss_end) {
-        const size_t left_shifted_code = (size_t)bit_stream_get_next_bits(file, stream, 16, 0);
-        lut_entry = huff_tbl_ac->left_shifted_code_lut[left_shifted_code];
-        bit_stream_get_next_bits(file, stream, (size_t)lut_entry.length, 1);
-        
-        print_binary(left_shifted_code, 15, lut_entry.length);
-
-        // end of block run
-        if (((lut_entry.symbol & 0x0F) == 0) && (lut_entry.symbol != 0xF0)) {
-            const size_t size = (size_t)(lut_entry.symbol >> 4);
-            if (size == 0) return 0;
-            const uint32_t raw_bits = bit_stream_get_next_bits(file, stream, size, 1);
-            const uint32_t run_length = raw_bits + (1 << size);
-            return (size_t)run_length - 1; // this block is included
+    // refinement
+    else {
+        // DC component
+        if (spectral_index == 0) {
+            const int32_t refinement_bit = bit_stream_get_next_bits(file, stream, 1, 1);
+            print_binary(refinement_bit, 0, 1);
+            curr_block->coefficients[0] |= (refinement_bit << al);
+            ++spectral_index;
         }
 
-        // otherwise, symbol is split into 0xRS, with R = run length, S = size, as in number of bits to read next
-        size_t run_length = (size_t)(lut_entry.symbol >> 4);
-        const size_t size = (size_t)(lut_entry.symbol & 0x0F);
-        
-        const uint32_t raw_bits = bit_stream_get_next_bits(file, stream, size, 1);
+        // AC components
+        const int pos = 1 << al;
+        const int neg = -(1 << al);
+        if (state->eob_run == 0) {
 
-        print_binary(raw_bits, size - 1, size);
+            while (spectral_index <= ss_end) {
+                // read huffman symbol
+                const size_t left_shifted_code = (size_t)bit_stream_get_next_bits(file, stream, 16, 0);
+                lut_entry = huff_tbl_ac->left_shifted_code_lut[left_shifted_code];
+                bit_stream_get_next_bits(file, stream, (size_t)lut_entry.length, 1);
+                print_binary(left_shifted_code, 15, lut_entry.length);
 
-        // handle normally for first scan
-        if (ah == 0) {
-            spectral_index += run_length;
-            if (spectral_index > ss_end) return 0;
-            curr_block->coefficients[spectral_index++] += parse_raw_value(raw_bits, size) << al;
-        }
-        // handle non-zero for subsequent scans
-        else {
-            while ((spectral_index <= ss_end) && (run_length > 0)) {
-                // skip zero, refine non-zero
-                if (curr_block->coefficients[spectral_index] == 0) {
-                    --run_length;
+                // symbol is split into 0xRS, with R = run length, S = size, as in number of bits to read next
+                size_t run_length = (size_t)(lut_entry.symbol >> 4);
+                const size_t size = (size_t)(lut_entry.symbol & 0x0F);
+
+                int32_t value = 0;
+
+                // refinement bit
+                if (size == 1) {
+                    const int32_t refinement_bit = bit_stream_get_next_bits(file, stream, 1, 1);
+                    print_binary(refinement_bit, 0, 1);
+
+                    value = (refinement_bit == 1) ? pos : neg;
                 }
+
+                // rle
+                else if (size == 0) {
+                    // full zero run
+                    if (lut_entry.symbol == 0xF0) {
+                    }
+                    // end of band run
+                    else {
+                        const size_t size = (size_t)(lut_entry.symbol >> 4);
+                        if (size == 0) return;
+
+                        const uint32_t raw_bits = bit_stream_get_next_bits(file, stream, size, 1);
+                        const uint32_t run_length = raw_bits + (1 << size);
+                        state->eob_run += (size_t)run_length - 1;
+                        return;
+                    }
+                }
+
                 else {
-                    curr_block->coefficients[spectral_index] += parse_raw_value(raw_bits, 1) << al;
+                    ERROR("invalid symbol refinement scan");
+                }
+                
+                // handle run length
+                while (run_length > 0) {
+                    if (curr_block->coefficients[spectral_index] != 0) {
+                        const int32_t refinement_bit = bit_stream_get_next_bits(file, stream, 1, 1);
+                        print_binary(refinement_bit, 0, 1);
+
+                        if (curr_block->coefficients[spectral_index] >= 0) {
+                            curr_block->coefficients[spectral_index] += pos;
+                        }
+                        else {
+                            curr_block->coefficients[spectral_index] += neg;
+                        }
+                    }
+
+                    ++spectral_index;
+                    --run_length;
+                    continue;
                 }
 
-                ++spectral_index;
+                if ((value != 0) && (spectral_index <= ss_end)) {
+                    curr_block->coefficients[spectral_index++] = value;
+                }
             }
         }
 
+        // refinement eob runs still have refinement bits
+        else if (state->eob_run > 0) {
+            while (spectral_index < ss_end) {
+                if (curr_block->coefficients[spectral_index] != 0) {
+                    const int32_t refinement_bit = bit_stream_get_next_bits(file, stream, 1, 1);
+                    print_binary(refinement_bit, 0, 1);
 
+                    if (curr_block->coefficients[spectral_index] >= 0) {
+                        curr_block->coefficients[spectral_index] += pos;
+                    }
+                    else {
+                        curr_block->coefficients[spectral_index] += neg;
+                    }
+                }
+                ++spectral_index;
+            }
+            --state->eob_run;
+        }
     }
-    return 0;
+}
+
+int handle_restarts(FILE* file, jpeg_state_t* state, bit_stream_t* stream) {
+    int has_restarts = (state->restart_interval > 0);
+    int n_mcus_before_restart = state->restart_interval;
+    int did_restart = 0;
+    if (has_restarts) {
+        if (n_mcus_before_restart == 0) {
+            #if DEBUG
+            if (!stream->hold) {
+                printf("desync between restart markers and restart interval?\n");
+                printf("ftell() %i\n", (int)ftell(file));
+            }
+            #endif
+            
+            // restart the bitstream on the byte after the restart marker
+            if (stream->hold == HOLD_RESTART) {
+                stream->hold = HOLD_CONTINUE;
+                bit_stream_init(stream);
+                for (size_t i = 0; i < state->n_components; ++i) {
+                    size_t mapping = state->component_mapping[i];
+                    state->components[mapping].dc_prev = 0;
+                }
+                did_restart = 1;
+            }
+            n_mcus_before_restart += state->restart_interval;
+        }
+        --n_mcus_before_restart;
+    }
+    return did_restart;
 }
 
 size_t parse_start_of_scan(FILE* file, jpeg_state_t* state, int do_decode) {
@@ -1099,78 +1221,76 @@ size_t parse_start_of_scan(FILE* file, jpeg_state_t* state, int do_decode) {
     bit_stream_t stream;
     bit_stream_init(&stream);
 
-    const size_t n_mcu_x = state->n_mcu_x;
-    const size_t n_mcu_y = state->n_mcu_y;
-
-    int has_restarts = (state->restart_interval > 0);
-    int n_mcus_before_restart = state->restart_interval;
-
     int n_block_to_skip = 0;
 
-    for (size_t mcu_y = 0; mcu_y < n_mcu_y; ++mcu_y) {
-        for (size_t mcu_x = 0; mcu_x < n_mcu_x; ++mcu_x) {
-            if (has_restarts) {
-                if (n_mcus_before_restart == 0) {
-                    #if DEBUG
-                    if (!stream.hold) {
-                        printf("desync between restart markers and restart interval?\n");
-                        printf("ftell() %i\n", (int)ftell(file));
-                        printf("mcu %i at (%i, %i)\n", (int)((mcu_y * n_mcu_x) + mcu_x), (int)mcu_x, (int)mcu_y);
-                    }
+    // handle interleaved scan
+    if (state->start_of_scan.n_components > 1) {
+        const size_t n_mcu_x = state->n_mcu_x;
+        const size_t n_mcu_y = state->n_mcu_y;
+
+        for (size_t mcu_y = 0; mcu_y < n_mcu_y; ++mcu_y) {
+            for (size_t mcu_x = 0; mcu_x < n_mcu_x; ++mcu_x) {
+                if (handle_restarts(file, state, &stream)) {
+                    state->eob_run = 0;
+                }
+                
+                // populate spectral band
+                for (size_t comp_id = 0; comp_id < state->start_of_scan.n_components; ++comp_id) {
+                    jpeg_component_t component_huff = state->start_of_scan.components[comp_id];
+                    jpeg_channel_t* component_info = &state->components[(size_t)component_huff.id];
+                    
+                    const size_t width = (size_t)component_info->blocks_per_mcu.width;
+                    const size_t height = (size_t)component_info->blocks_per_mcu.height;
+                    
+                    #if DEBUG_VERBOSE
+                    printf("\tBLOCK MCU: %02X\n", component_info.blocks_per_mcu.u8);
                     #endif
                     
-                    // restart the bitstream on the byte after the restart marker
-                    if (stream.hold == HOLD_RESTART) {
-                        stream.hold = HOLD_CONTINUE;
-                        bit_stream_init(&stream);
-                        for (size_t i = 0; i < state->n_components; ++i) {
-                            size_t mapping = state->component_mapping[i];
-                            state->components[mapping].dc_prev = 0;
+                    for (size_t block_y = 0; block_y < height; ++block_y) {
+                        for (size_t block_x = 0; block_x < width; ++block_x) {
+                            const size_t unswizzled_block_x = ((mcu_x * width) + block_x);
+                            const size_t unswizzled_block_y = ((mcu_y * height) + block_y);
+                            const size_t unswizzled_block_index = unswizzled_block_x + (unswizzled_block_y * n_mcu_x * width);
+
+                            fetch_coefficients(file, &stream, state, comp_id,
+                                unswizzled_block_index,
+                                state->start_of_scan.spectral_selection_min, 
+                                state->start_of_scan.spectral_selection_max
+                            );
                         }
-                        n_block_to_skip = 0;
-                    }
-                    n_mcus_before_restart += state->restart_interval;
-                }
-                --n_mcus_before_restart;
-            }
-
-            // populate spectral band
-            for (size_t comp_id = 0; comp_id < state->start_of_scan.n_components; ++comp_id) {
-                jpeg_component_t component_huff = state->start_of_scan.components[comp_id];
-                jpeg_channel_t* component_info = &state->components[(size_t)component_huff.id];
-
-                const size_t width = (size_t)component_info->blocks_per_mcu.width;
-                const size_t height = (size_t)component_info->blocks_per_mcu.height;
-
-#if DEBUG_VERBOSE
-                printf("\tBLOCK MCU: %02X\n", component_info.blocks_per_mcu.u8);
-#endif
-
-                for (size_t block_y = 0; block_y < height; ++block_y) {
-                    for (size_t block_x = 0; block_x < width; ++block_x) {
-                        if (n_block_to_skip) {
-                            --n_block_to_skip;
-                            continue;
-                        }
-
-                        size_t unswizzled_block_x = 0;
-                        size_t unswizzled_block_y = 0;
-                        size_t unswizzled_block_index = 0;
-
-                        unswizzled_block_x = ((mcu_x * width) + block_x);
-                        unswizzled_block_y = ((mcu_y * height) + block_y);
-                        unswizzled_block_index = unswizzled_block_x + (unswizzled_block_y * n_mcu_x * width);
-
-                        n_block_to_skip += fetch_coefficients(file, &stream, state, comp_id,
-                            unswizzled_block_index,
-                            state->start_of_scan.spectral_selection_min, 
-                            state->start_of_scan.spectral_selection_max
-                        );
                     }
                 }
             }
         }
     }
+
+    // handle single component scan
+    else if (state->start_of_scan.n_components == 1) {
+        jpeg_component_t component_huff = state->start_of_scan.components[0];
+        jpeg_channel_t* component_info = &state->components[(size_t)component_huff.id];
+
+        const size_t n_block_x = state->n_mcu_x * (size_t)component_info->blocks_per_mcu.width;
+        const size_t n_block_y = state->n_mcu_y * (size_t)component_info->blocks_per_mcu.height;
+
+        for (size_t block_y = 0; block_y < n_block_y; ++block_y) {
+            for (size_t block_x = 0; block_x < n_block_x; ++block_x) {
+                if (handle_restarts(file, state, &stream)) {
+                    state->eob_run = 0;
+                }
+
+                const size_t unswizzled_block_index = (block_y * n_block_x) + block_x;
+                
+                printf("unswizzled_block_index: %i (block at %i, %i out of %i, %i)\n", (int)unswizzled_block_index, (int)block_x * 8, (int)block_y * 8, (int)n_block_x * 8, (int)n_block_y * 8);
+                            
+                fetch_coefficients(file, &stream, state, 0,
+                    unswizzled_block_index,
+                    state->start_of_scan.spectral_selection_min, 
+                    state->start_of_scan.spectral_selection_max
+                );
+            }
+        }
+    }
+    else ERROR("invalid number of components");
 
     const size_t marker_data_end = ftell(file);
     return marker_data_end - marker_data_start;
@@ -1329,6 +1449,7 @@ void write_bmp(const char* path, const rgb8_t* img, int w, int h) {
         fwrite(((uint8_t*)img)+(w*(h-i-1)*3),3,w,f);
         fwrite(bmppad,1,(4-(w*3)%4)%4,f);
     }
+    fclose(f);
 }
 
 #define ALIGN_UP(value, align) ((((value) + (align) - 1) / (align)) * (align))
@@ -1611,8 +1732,8 @@ void handle_markers(FILE* in_file, jpeg_state_t* state, int do_decode) {
 #if STANDALONE
 int main(int argc, char** argv) {
     // parse arguments
-    char* in_path = "../test/test23.jpg";
-    char* out_path = "../result/test23.bmp";
+    char* in_path = "../test/StandingThere.jpg";
+    char* out_path = "../result/StandingThere.bmp";
     if (argc != 3) {
         printf("Usage: jpeg_dec <input> <output>\n");
         // return 1;
